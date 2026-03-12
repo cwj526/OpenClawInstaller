@@ -173,6 +173,33 @@ check_command() {
     command -v "$1" &> /dev/null
 }
 
+get_shell_rc() {
+    if [ -f "$HOME/.zshrc" ]; then
+        echo "$HOME/.zshrc"
+    elif [ -f "$HOME/.bashrc" ]; then
+        echo "$HOME/.bashrc"
+    elif [ -f "$HOME/.bash_profile" ]; then
+        echo "$HOME/.bash_profile"
+    else
+        echo "$HOME/.bashrc"
+    fi
+}
+
+ensure_path_export() {
+    local export_line="$1"
+    local shell_rc
+    shell_rc=$(get_shell_rc)
+
+    if [ -n "$shell_rc" ]; then
+        touch "$shell_rc"
+        if ! grep -Fq "$export_line" "$shell_rc" 2>/dev/null; then
+            echo "" >> "$shell_rc"
+            echo "# OpenClaw PATH" >> "$shell_rc"
+            echo "$export_line" >> "$shell_rc"
+        fi
+    fi
+}
+
 install_homebrew() {
     if ! check_command brew; then
         log_step "安装 Homebrew..."
@@ -295,10 +322,33 @@ install_openclaw() {
         fi
     fi
     
-    # 使用 npm 全局安装
+    # 优先尝试 npm 全局安装，失败时回退到用户目录安装
     log_info "正在从 npm 安装 OpenClaw..."
-    npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm
-    
+    if npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm; then
+        log_info "已完成全局安装"
+    else
+        log_warn "全局安装失败，正在切换到用户目录安装..."
+        local npm_prefix="$HOME/.local/openclaw"
+        local npm_bin="$npm_prefix/bin"
+        mkdir -p "$npm_prefix"
+
+        if npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm --prefix "$npm_prefix"; then
+            export PATH="$npm_bin:$PATH"
+            ensure_path_export "export PATH=\"$npm_bin:\$PATH\""
+            hash -r 2>/dev/null || true
+            log_info "已安装到用户目录: $npm_prefix"
+            log_info "当前会话已自动加入 PATH"
+        else
+            log_error "OpenClaw 安装失败"
+            echo ""
+            echo -e "${YELLOW}可尝试以下方案:${NC}"
+            echo "  1. 使用 sudo 重新运行安装脚本"
+            echo "  2. 手动执行: npm install -g openclaw@$OPENCLAW_VERSION --prefix \"$npm_prefix\""
+            echo "  3. 重新打开终端后确认 PATH 包含: $npm_bin"
+            exit 1
+        fi
+    fi
+
     # 验证安装
     if check_command openclaw; then
         log_info "OpenClaw 安装成功: $(openclaw --version 2>/dev/null || echo 'installed')"
