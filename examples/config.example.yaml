@@ -11,63 +11,38 @@ version: "1.0"
 debug: false
 
 # ============================================================
-# AI 模型配置
+# AI 模型配置（当前项目默认通过 Tuzi API 接入）
+# 注意：安装器和配置菜单会直接写入 ~/.openclaw/openclaw.json
+# 此 YAML 仅作为说明示例保留
 # ============================================================
 llm:
-  # 支持的提供商:
-  #   - anthropic         : Anthropic Claude (官方)
-  #   - openai            : OpenAI GPT (官方)
-  #   - openai-compatible : 任何兼容 OpenAI API 的服务 (OneAPI/NewAPI/代理等)
-  #   - ollama            : Ollama 本地模型
-  #   - openrouter        : OpenRouter 多模型网关
-  #   - google            : Google Gemini
-  #   - azure             : Azure OpenAI
-  #   - groq              : Groq (超快推理)
-  #   - mistral           : Mistral AI
-  #   - xai               : xAI Grok (Elon Musk)
-  #   - zai               : 智谱 GLM (中国)
-  #   - minimax           : MiniMax (国际)
-  #   - minimax-cn        : MiniMax (中国)
-  #   - opencode          : OpenCode (免费多模型)
-  #   - google-gemini-cli : Google Gemini CLI (实验性)
-  #   - google-antigravity: Google Antigravity (实验性)
-  provider: anthropic
-  
-  # API Key（从对应平台获取）
-  # Anthropic: https://console.anthropic.com/
-  # OpenAI: https://platform.openai.com/
-  # OpenRouter: https://openrouter.ai/
-  # Google: https://aistudio.google.com/apikey
-  # Groq: https://console.groq.com/
-  # Mistral: https://console.mistral.ai/
-  # xAI: https://console.x.ai/
-  # 智谱: https://open.bigmodel.cn/
-  # MiniMax: https://platform.minimax.chat/
-  # OpenCode: https://opencode.ai/
-  api_key: "sk-ant-your-api-key-here"
-  
-  # 模型选择
-  # Anthropic: claude-opus-4-20250514 / claude-sonnet-4-20250514 / claude-3-5-haiku-20241022
-  # OpenAI: gpt-4o / gpt-4o-mini / gpt-4-turbo / o1-preview
-  # Google: gemini-2.0-flash / gemini-1.5-pro / gemini-1.5-flash
-  # Groq: llama-3.3-70b-versatile / llama-3.1-8b-instant / mixtral-8x7b-32768
-  # Mistral: mistral-large-latest / mistral-medium-latest / codestral-latest
-  # xAI: grok-4-fast / grok-4 / grok-3-fast-latest / grok-2-vision-latest
-  # 智谱 (zai): glm-4.7 / glm-4.6 / glm-4.6v / glm-4.5-flash
-  # MiniMax: MiniMax-M2.1 / MiniMax-M2
-  # OpenCode: claude-sonnet-4-5 / gpt-5 / gemini-3-pro / glm-4.7-free
-  # Ollama: llama3 / mistral / codellama 等
-  # OpenAI Compatible: 根据你的服务支持的模型填写
-  model: claude-sonnet-4-20250514
-  
-  # 自定义 API 端点（必填项：openai-compatible, ollama, groq, mistral, azure）
-  # 示例:
-  #   - OpenAI Compatible: https://your-api.com/v1
-  #   - Ollama: http://localhost:11434
-  #   - Groq: https://api.groq.com/openai/v1
-  #   - Mistral: https://api.mistral.ai/v1
-  # base_url: "https://api.example.com/v1"
-  
+  # 当前激活分组
+  active_group: claude-code
+
+  # API Key 获取地址：https://api.tu-zi.com/token
+  # 注意：Claude-Code 和 Codex 需要使用各自独立的 Key
+  groups:
+    claude_code:
+      provider: tuzi-claude-code
+      group: Claude-Code
+      api_key: "sk-your-claude-code-key"
+      base_url: "https://api.tu-zi.com"
+      api_type: "anthropic-messages"
+      model: "claude-sonnet-4-6"
+      fallback_model: "claude-opus-4-6"
+
+    codex:
+      provider: tuzi-codex
+      group: Codex
+      api_key: "sk-your-codex-key"
+      base_url: "https://api.tu-zi.com/v1"
+      api_type: "openai-responses"
+      model: "gpt-5.4"
+      fallback_model: "gpt-5.2-high"
+
+  # 脚本支持重复添加两个分组
+  # 最后一次配置的分组会成为当前默认模型来源
+
   # 模型参数
   max_tokens: 4096          # 最大输出 token 数
   temperature: 0.7          # 温度参数 (0-1)，越高越随机
@@ -78,17 +53,37 @@ llm:
     max_attempts: 3         # 最大重试次数
     delay: 1000             # 重试间隔（毫秒）
 
-# ============================================================
-# OpenAI Compatible 配置示例
-# 适用于 OneAPI, New API, 各种代理服务等
-# ============================================================
-# llm:
-#   provider: openai-compatible
-#   base_url: "https://oneapi.example.com/v1"
-#   api_key: "sk-your-api-key"
-#   model: claude-sonnet-4.5
-#   max_tokens: 4096
-#   temperature: 0.7
+# Claude-Code 可选模型：
+# claude-sonnet-4-6
+# claude-sonnet-4-6-thinking
+# claude-sonnet-4-5-20250929-thinking
+# claude-sonnet-4-5-20250929
+# claude-sonnet-4-20250514-thinking
+# claude-sonnet-4-20250514
+# claude-opus-4-6
+# claude-opus-4-5-20251101-thinking
+# claude-opus-4-5-20251101
+# claude-opus-4-5
+# claude-opus-4-20250514-thinking
+# claude-opus-4-20250514
+
+# Codex 可选模型：
+# gpt-5.4
+# gpt-5.3-codex
+# gpt-5.2-medium
+# gpt-5.2-high
+# gpt-5.2-codex
+# gpt-5.2
+# gpt-5.1-high
+# gpt-5.1-medium
+# gpt-5.1-low
+# gpt-5.1-codex-max-high
+# gpt-5.1-codex-max
+# gpt-5.1
+# gpt-5-codex
+# gpt-5-high
+# gpt-5-low
+# gpt-5
 
 # ============================================================
 # 身份与个性配置

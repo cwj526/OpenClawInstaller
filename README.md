@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
-> 🚀 一键部署你的私人 AI 助手 OpenClaw，支持多平台多模型配置
+> 🚀 一键部署你的私人 AI 助手 OpenClaw，内置 Tuzi API 快速接入
 
 <p align="center">
   <img src="photo/menu.png" alt="OpenClaw 配置中心" width="600">
@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/i
 安装脚本会自动：
 1. 检测系统环境并安装依赖
 2. 安装 OpenClaw
-3. 引导完成核心配置（AI模型、身份信息）
+3. 引导完成核心配置（Tuzi API、身份信息）
 4. 测试 API 连接
 5. **自动启动 OpenClaw 服务**
 6. 可选打开配置菜单进行详细配置（渠道等）
@@ -110,30 +110,18 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/c
 
 ## ✨ 功能特性
 
-### 🤖 多模型支持
+### 🤖 Tuzi API 快速接入
 
 <p align="center">
   <img src="photo/llm.png" alt="AI 模型配置" width="600">
 </p>
 
-**主流服务商:**
-- **Anthropic Claude** - claude-sonnet-4-5 / claude-opus-4-5 / claude-haiku-4-5 *(支持自定义 API 地址)*
-- **OpenAI GPT** - gpt-4o / gpt-4o-mini / gpt-4-turbo *(支持自定义 API 地址，需支持 v1/responses)*
-- **Google Gemini** - gemini-2.0-flash / gemini-1.5-pro / gemini-1.5-flash
-
-**多模型网关:**
-- **OpenRouter** - 多模型网关，一个 Key 用遍所有模型 (claude-sonnet-4 / gpt-4o / gemini-pro-1.5)
-
-**快速推理:**
-- **Groq** - 超快推理，llama-3.3-70b-versatile / llama-3.1-8b-instant / mixtral-8x7b
-- **Mistral AI** - mistral-large-latest / mistral-small-latest / codestral-latest
-
-**本地部署:**
-- **Ollama** - 本地部署，无需 API Key (llama3 / llama3:70b / mistral)
-
-> 💡 **自定义 API 地址**: Anthropic Claude 和 OpenAI GPT 都支持自定义 API 地址，可接入 OneAPI/NewAPI/API 代理等服务。配置时先输入自定义地址，再输入 API Key。
->
-> ⚠️ **OpenAI 中转要求**: 自定义 OpenAI API 地址必须支持 `v1/responses` 路径（OpenAI Responses API），不仅仅是传统的 `v1/chat/completions`。请确认您的中转服务已支持此接口。
+- 安装器和配置菜单都默认进入 **Tuzi API** 配置流程
+- 支持用户在配置时选择 **Claude-Code** 或 **Codex**
+- 每个分组使用各自独立的 **API Key**，不会混用
+- 模型通过预置列表选择，并保留“自定义模型名称”选项
+- 可重复添加 `Claude-Code` 和 `Codex`，配置会并存为两个 Provider
+- 配置会自动写入 `~/.openclaw/openclaw.json` 的 `auth`、`models`、`agents` 段落
 
 ### 📱 多渠道接入
 
@@ -169,31 +157,30 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/c
 
 ### 配置 AI 模型
 
-运行配置菜单后选择 `[2] AI 模型配置`，可选择多种 AI 提供商：
+运行配置菜单后选择 `[2] AI 模型配置`，将直接进入 Tuzi API 配置流程：
 
 <p align="center">
   <img src="photo/llm.png" alt="AI 模型配置界面" width="600">
 </p>
 
-#### Anthropic Claude 配置
+1. 选择 Tuzi API 分组：`Claude-Code` 或 `Codex`
+2. 输入该分组专用的 API Key
+3. 从预置模型列表中选择主模型
+4. 可选配置备用模型，也支持自定义模型名称
+5. 如有需要，可再次进入配置流程添加另一个分组
+6. 脚本会自动写入 `~/.openclaw/openclaw.json` 并设置最后一次配置的分组为当前默认模型
 
-1. 在配置菜单中选择 Anthropic Claude
-2. **先输入自定义 API 地址**（留空使用官方 API）
-3. 输入 API Key（官方 Key 从 [Anthropic Console](https://console.anthropic.com/) 获取）
-4. 选择模型（推荐 claude-sonnet-4-5-20250929）
+> 💡 API Key 获取地址: [https://api.tu-zi.com/token](https://api.tu-zi.com/token)
+>
+> ⚠️ `Claude-Code` 和 `Codex` 必须使用各自分组对应的 Key，不能混用
 
-> 💡 支持 OneAPI/NewAPI 等第三方代理服务，只需填入对应的 API 地址和 Key
+#### Claude-Code 可选模型
 
-#### OpenAI GPT 配置
+`claude-sonnet-4-6`、`claude-sonnet-4-6-thinking`、`claude-sonnet-4-5-20250929-thinking`、`claude-sonnet-4-5-20250929`、`claude-sonnet-4-20250514-thinking`、`claude-sonnet-4-20250514`、`claude-opus-4-6`、`claude-opus-4-5-20251101-thinking`、`claude-opus-4-5-20251101`、`claude-opus-4-5`、`claude-opus-4-20250514-thinking`、`claude-opus-4-20250514`
 
-1. 在配置菜单中选择 OpenAI GPT
-2. **先输入自定义 API 地址**（留空使用官方 API）
-3. 输入 API Key（官方 Key 从 [OpenAI Platform](https://platform.openai.com/) 获取）
-4. 选择模型
+#### Codex 可选模型
 
-> ⚠️ **中转服务要求**: 如使用自定义 API 地址，中转服务必须支持 OpenAI 的 **Responses API** (`v1/responses` 路径)，而非仅支持传统的 Chat Completions API (`v1/chat/completions`)。部分老旧或功能不全的中转服务可能不支持此接口，请提前确认。
-
-> 💡 **其他模型**: 配置菜单还支持 Google Gemini、OpenRouter、Groq、Mistral AI、Ollama 等，按菜单提示操作即可。
+`gpt-5.4`、`gpt-5.3-codex`、`gpt-5.2-medium`、`gpt-5.2-high`、`gpt-5.2-codex`、`gpt-5.2`、`gpt-5.1-high`、`gpt-5.1-medium`、`gpt-5.1-low`、`gpt-5.1-codex-max-high`、`gpt-5.1-codex-max`、`gpt-5.1`、`gpt-5-codex`、`gpt-5-high`、`gpt-5-low`、`gpt-5`
 
 ### 配置 Telegram 机器人
 

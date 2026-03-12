@@ -233,6 +233,385 @@ get_env_value() {
     fi
 }
 
+get_openclaw_primary_model() {
+    if [ ! -f "$OPENCLAW_JSON" ]; then
+        return 0
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+try {
+  const config = JSON.parse(require('fs').readFileSync('$OPENCLAW_JSON', 'utf8'));
+  console.log(config?.agents?.defaults?.model?.primary || '');
+} catch (e) {
+  console.log('');
+}
+" 2>/dev/null
+        return 0
+    fi
+
+    if command -v python3 &> /dev/null; then
+        python3 -c "
+import json
+try:
+    with open('$OPENCLAW_JSON', 'r') as f:
+        config = json.load(f)
+    print(config.get('agents', {}).get('defaults', {}).get('model', {}).get('primary', ''))
+except Exception:
+    print('')
+" 2>/dev/null
+    fi
+}
+
+get_tuzi_group_settings() {
+    local group="$1"
+    case "$group" in
+        codex)
+            echo "tuzi-codex|https://api.tu-zi.com/v1|openai-responses|Codex|TUZI_CODEX"
+            ;;
+        *)
+            echo "tuzi-claude-code|https://api.tu-zi.com|anthropic-messages|Claude-Code|TUZI_CLAUDE_CODE"
+            ;;
+    esac
+}
+
+resolve_tuzi_group_test_config() {
+    local group="$1"
+    local settings
+    settings=$(get_tuzi_group_settings "$group")
+    local provider_id="${settings%%|*}"
+    local rest="${settings#*|}"
+    local base_url="${rest%%|*}"
+    rest="${rest#*|}"
+    local api_type="${rest%%|*}"
+    rest="${rest#*|}"
+    local group_label="${rest%%|*}"
+    local env_prefix="${rest#*|}"
+
+    local api_key=$(get_env_value "${env_prefix}_API_KEY")
+    local model=$(get_env_value "${env_prefix}_MODEL")
+    local fallback_model=$(get_env_value "${env_prefix}_FALLBACK_MODEL")
+
+    echo "${provider_id}|${group_label}|${base_url}|${api_type}|${api_key}|${model}|${fallback_model}|${env_prefix}"
+}
+
+choose_tuzi_model() {
+    local group="$1"
+    local result_var="$2"
+    local models=()
+
+    if [ "$group" = "codex" ]; then
+        models=(
+            "gpt-5.4"
+            "gpt-5.3-codex"
+            "gpt-5.2-medium"
+            "gpt-5.2-high"
+            "gpt-5.2-codex"
+            "gpt-5.2"
+            "gpt-5.1-high"
+            "gpt-5.1-medium"
+            "gpt-5.1-low"
+            "gpt-5.1-codex-max-high"
+            "gpt-5.1-codex-max"
+            "gpt-5.1"
+            "gpt-5-codex"
+            "gpt-5-high"
+            "gpt-5-low"
+            "gpt-5"
+        )
+    else
+        models=(
+            "claude-sonnet-4-6"
+            "claude-sonnet-4-6-thinking"
+            "claude-sonnet-4-5-20250929-thinking"
+            "claude-sonnet-4-5-20250929"
+            "claude-sonnet-4-20250514-thinking"
+            "claude-sonnet-4-20250514"
+            "claude-opus-4-6"
+            "claude-opus-4-5-20251101-thinking"
+            "claude-opus-4-5-20251101"
+            "claude-opus-4-5"
+            "claude-opus-4-20250514-thinking"
+            "claude-opus-4-20250514"
+        )
+    fi
+
+    echo -e "${CYAN}选择模型:${NC}"
+    echo ""
+    local i=1
+    for model in "${models[@]}"; do
+        print_menu_item "$i" "$model" "•"
+        i=$((i + 1))
+    done
+    print_menu_item "$i" "自定义模型名称" "✏️"
+    echo ""
+
+    read -p "$(echo -e "${YELLOW}请选择 [1-$i] (默认: 1): ${NC}")" model_choice < "$TTY_INPUT"
+    model_choice=${model_choice:-1}
+
+    local chosen_model=""
+    if [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
+        chosen_model="${models[$((model_choice - 1))]}"
+    else
+        read -p "$(echo -e "${YELLOW}输入模型名称: ${NC}")" chosen_model < "$TTY_INPUT"
+    fi
+
+    printf -v "$result_var" '%s' "$chosen_model"
+}
+
+write_tuzi_env_file() {
+    local active_group="$1"
+    local active_provider_id="$2"
+    local active_base_url="$3"
+    local active_api_type="$4"
+    local active_api_key="$5"
+    local active_model="$6"
+    local active_fallback="$7"
+
+    local env_file="$OPENCLAW_ENV"
+    local claude_key="$8"
+    local claude_model="$9"
+    local claude_fallback="${10}"
+    local codex_key="${11}"
+    local codex_model="${12}"
+    local codex_fallback="${13}"
+
+    cat > "$env_file" << EOF
+# OpenClaw 环境变量配置
+# 由配置菜单自动生成: $(date '+%Y-%m-%d %H:%M:%S')
+export TUZI_API_KEY=$active_api_key
+export TUZI_GROUP=$active_group
+export TUZI_PROVIDER_ID=$active_provider_id
+export TUZI_BASE_URL=$active_base_url
+export TUZI_API_TYPE=$active_api_type
+export TUZI_MODEL=$active_model
+EOF
+
+    if [ -n "$active_fallback" ]; then
+        echo "export TUZI_FALLBACK_MODEL=$active_fallback" >> "$env_file"
+    fi
+    if [ -n "$claude_key" ]; then
+        echo "export TUZI_CLAUDE_CODE_API_KEY=$claude_key" >> "$env_file"
+    fi
+    if [ -n "$claude_model" ]; then
+        echo "export TUZI_CLAUDE_CODE_MODEL=$claude_model" >> "$env_file"
+    fi
+    if [ -n "$claude_fallback" ]; then
+        echo "export TUZI_CLAUDE_CODE_FALLBACK_MODEL=$claude_fallback" >> "$env_file"
+    fi
+    if [ -n "$codex_key" ]; then
+        echo "export TUZI_CODEX_API_KEY=$codex_key" >> "$env_file"
+    fi
+    if [ -n "$codex_model" ]; then
+        echo "export TUZI_CODEX_MODEL=$codex_model" >> "$env_file"
+    fi
+    if [ -n "$codex_fallback" ]; then
+        echo "export TUZI_CODEX_FALLBACK_MODEL=$codex_fallback" >> "$env_file"
+    fi
+}
+
+configure_tuzi_provider() {
+    local group="$1"
+    local api_key="$2"
+    local primary_model="$3"
+    local fallback_model="$4"
+    local config_file="$5"
+
+    local settings
+    settings=$(get_tuzi_group_settings "$group")
+    local provider_id="${settings%%|*}"
+    local rest="${settings#*|}"
+    local base_url="${rest%%|*}"
+    rest="${rest#*|}"
+    local api_type="${rest%%|*}"
+    local label_and_prefix="${rest#*|}"
+    local group_label="${label_and_prefix%%|*}"
+    local env_prefix="${label_and_prefix#*|}"
+
+    if [ -z "$api_key" ] || [ -z "$primary_model" ] || [ -z "$config_file" ]; then
+        log_error "Tuzi 配置参数不完整"
+        return 1
+    fi
+
+    local config_success=false
+
+    if command -v node &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_tuzi_vars_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "provider_id": "$provider_id",
+  "base_url": "$base_url",
+  "api_key": "$api_key",
+  "api_type": "$api_type",
+  "primary_model": "$primary_model",
+  "fallback_model": "$fallback_model",
+  "group_label": "$group_label",
+  "env_prefix": "$env_prefix"
+}
+EOFVARS
+
+        node -e "
+const fs = require('fs');
+const vars = JSON.parse(fs.readFileSync('$tmp_vars', 'utf8'));
+
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(vars.config_file, 'utf8'));
+} catch (e) {
+  config = {};
+}
+
+config.auth ??= {};
+config.auth.profiles ??= {};
+config.auth.profiles[vars.provider_id + ':default'] = {
+  provider: vars.provider_id,
+  mode: 'api_key'
+};
+
+config.models ??= {};
+config.models.providers ??= {};
+config.models.providers[vars.provider_id] = {
+  baseUrl: vars.base_url,
+  apiKey: vars.api_key,
+  api: vars.api_type,
+  models: [
+    {
+      id: vars.primary_model,
+      name: vars.primary_model,
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+    }
+  ]
+};
+
+if (vars.fallback_model) {
+  config.models.providers[vars.provider_id].models.push({
+    id: vars.fallback_model,
+    name: vars.fallback_model,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+  });
+}
+
+config.agents ??= {};
+config.agents.defaults ??= {};
+config.agents.defaults.model = {
+  primary: vars.provider_id + '/' + vars.primary_model,
+  fallbacks: vars.fallback_model ? [vars.provider_id + '/' + vars.fallback_model] : []
+};
+config.agents.defaults.models ??= {};
+config.agents.defaults.models[vars.provider_id + '/' + vars.primary_model] = {};
+if (vars.fallback_model) {
+  config.agents.defaults.models[vars.provider_id + '/' + vars.fallback_model] = {};
+}
+
+fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
+console.log('Tuzi provider configured: ' + vars.group_label);
+" 2>/dev/null
+        local node_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $node_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ] && command -v python3 &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_tuzi_vars_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "provider_id": "$provider_id",
+  "base_url": "$base_url",
+  "api_key": "$api_key",
+  "api_type": "$api_type",
+  "primary_model": "$primary_model",
+  "fallback_model": "$fallback_model",
+  "env_prefix": "$env_prefix"
+}
+EOFVARS
+
+        python3 -c "
+import json
+import os
+
+with open('$tmp_vars', 'r') as f:
+    vars = json.load(f)
+
+config = {}
+if os.path.exists(vars['config_file']):
+    try:
+        with open(vars['config_file'], 'r') as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+
+config.setdefault('auth', {}).setdefault('profiles', {})[vars['provider_id'] + ':default'] = {
+    'provider': vars['provider_id'],
+    'mode': 'api_key'
+}
+
+provider_models = [{
+    'id': vars['primary_model'],
+    'name': vars['primary_model'],
+    'reasoning': False,
+    'input': ['text'],
+    'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+    'contextWindow': 200000,
+    'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
+}]
+if vars['fallback_model']:
+    provider_models.append({
+        'id': vars['fallback_model'],
+        'name': vars['fallback_model'],
+        'reasoning': False,
+        'input': ['text'],
+        'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+        'contextWindow': 200000,
+        'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
+    })
+
+config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']] = {
+    'baseUrl': vars['base_url'],
+    'apiKey': vars['api_key'],
+    'api': vars['api_type'],
+    'models': provider_models
+}
+
+defaults = config.setdefault('agents', {}).setdefault('defaults', {})
+defaults['model'] = {
+    'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
+    'fallbacks': [f\"{vars['provider_id']}/{vars['fallback_model']}\"] if vars['fallback_model'] else []
+}
+defaults.setdefault('models', {})[f\"{vars['provider_id']}/{vars['primary_model']}\"] = {}
+if vars['fallback_model']:
+    defaults['models'][f\"{vars['provider_id']}/{vars['fallback_model']}\"] = {}
+
+with open(vars['config_file'], 'w') as f:
+    json.dump(config, f, indent=2)
+" 2>/dev/null
+        local py_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $py_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ]; then
+        log_error "Tuzi Provider 写入失败（需要 node 或 python3）"
+        return 1
+    fi
+
+    log_info "Tuzi Provider 已写入: $provider_id"
+    return 0
+}
+
 # ================================ 测试功能 ================================
 
 # 检查 OpenClaw 是否已安装
@@ -891,12 +1270,16 @@ show_status() {
         
         # 显示 OpenClaw 模型配置
         if check_openclaw_installed; then
-            local default_model=$(openclaw config get models.default 2>/dev/null || echo "未配置")
-            echo -e "    • 默认模型: ${WHITE}$default_model${NC}"
+            local default_model=$(get_openclaw_primary_model)
+            echo -e "    • 默认模型: ${WHITE}${default_model:-未配置}${NC}"
         fi
         
         # 检查 API Key 配置
-        if grep -q "ANTHROPIC_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
+        if grep -q "TUZI_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
+            local tuzi_group=$(get_env_value "TUZI_GROUP")
+            echo -e "    • AI 提供商: ${WHITE}Tuzi API${NC}"
+            [ -n "$tuzi_group" ] && echo -e "    • Tuzi 分组: ${WHITE}$tuzi_group${NC}"
+        elif grep -q "ANTHROPIC_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
             echo -e "    • AI 提供商: ${WHITE}Anthropic${NC}"
         elif grep -q "OPENAI_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
             echo -e "    • AI 提供商: ${WHITE}OpenAI${NC}"
@@ -923,70 +1306,125 @@ show_status() {
 # ================================ AI 模型配置 ================================
 
 config_ai_model() {
+    config_tuzi
+}
+
+config_tuzi() {
     clear_screen
     print_header
-    
-    echo -e "${WHITE}🤖 AI 模型配置${NC}"
+
+    echo -e "${WHITE}🦞 配置 Tuzi API${NC}"
     print_divider
     echo ""
-    
-    echo -e "${CYAN}选择 AI 提供商:${NC}"
-    echo -e "${GRAY}提示: 支持自定义 API 地址（通过自定义 Provider 配置）${NC}"
+    echo -e "${CYAN}当前版本仅提供 Tuzi API 快速接入${NC}"
+    echo -e "${GRAY}请先确认你的 API Key 对应 Claude-Code 或 Codex 分组${NC}"
+    echo -e "${GRAY}获取 Key: https://api.tu-zi.com/token${NC}"
     echo ""
-    echo -e "${WHITE}主流服务商:${NC}"
-    print_menu_item "1" "Anthropic Claude" "🟣"
-    print_menu_item "2" "OpenAI GPT" "🟢"
-    print_menu_item "3" "DeepSeek" "🔵"
-    print_menu_item "4" "Kimi (Moonshot)" "🌙"
-    print_menu_item "5" "Google Gemini" "🔴"
+
+    local active_group=$(get_env_value "TUZI_GROUP")
+    local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
+    local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
+    local claude_fallback=$(get_env_value "TUZI_CLAUDE_CODE_FALLBACK_MODEL")
+    local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
+    local codex_model=$(get_env_value "TUZI_CODEX_MODEL")
+    local codex_fallback=$(get_env_value "TUZI_CODEX_FALLBACK_MODEL")
+
+    echo -e "${CYAN}当前配置:${NC}"
+    if [ -n "$claude_key" ]; then
+        echo -e "  Claude-Code: ${GREEN}已配置${NC}"
+        [ -n "$claude_model" ] && echo -e "    主模型: ${WHITE}$claude_model${NC}"
+        [ -n "$claude_fallback" ] && echo -e "    备用模型: ${WHITE}$claude_fallback${NC}"
+    else
+        echo -e "  Claude-Code: ${GRAY}(未配置)${NC}"
+    fi
+    if [ -n "$codex_key" ]; then
+        echo -e "  Codex: ${GREEN}已配置${NC}"
+        [ -n "$codex_model" ] && echo -e "    主模型: ${WHITE}$codex_model${NC}"
+        [ -n "$codex_fallback" ] && echo -e "    备用模型: ${WHITE}$codex_fallback${NC}"
+    else
+        echo -e "  Codex: ${GRAY}(未配置)${NC}"
+    fi
+    if [ -n "$active_group" ]; then
+        echo -e "  当前激活分组: ${WHITE}$active_group${NC}"
+    fi
     echo ""
-    echo -e "${WHITE}多模型网关:${NC}"
-    print_menu_item "6" "OpenRouter (多模型网关)" "🔄"
-    print_menu_item "7" "OpenCode (免费多模型)" "🆓"
+
+    echo -e "${YELLOW}选择 Tuzi 分组:${NC}"
+    print_menu_item "1" "Claude-Code" "🟣"
+    print_menu_item "2" "Codex" "🟢"
     echo ""
-    echo -e "${WHITE}快速推理:${NC}"
-    print_menu_item "8" "Groq (超快推理)" "⚡"
-    print_menu_item "9" "Mistral AI" "🌬️"
-    echo ""
-    echo -e "${WHITE}本地/企业:${NC}"
-    print_menu_item "10" "Ollama 本地模型" "🟠"
-    print_menu_item "11" "Azure OpenAI" "☁️"
-    echo ""
-    echo -e "${WHITE}国产/其他:${NC}"
-    print_menu_item "12" "xAI Grok" "𝕏"
-    print_menu_item "13" "智谱 GLM (Zai)" "🇨🇳"
-    print_menu_item "14" "MiniMax" "🤖"
-    echo ""
-    echo -e "${WHITE}实验性:${NC}"
-    print_menu_item "15" "Google Gemini CLI" "🧪"
-    print_menu_item "16" "Google Antigravity" "🚀"
-    echo ""
-    print_menu_item "0" "返回主菜单" "↩️"
-    echo ""
-    
-    echo -en "${YELLOW}请选择 [0-16]: ${NC}"
-    read choice < "$TTY_INPUT"
-    
-    case $choice in
-        1) config_anthropic ;;
-        2) config_openai ;;
-        3) config_deepseek ;;
-        4) config_kimi ;;
-        5) config_google_gemini ;;
-        6) config_openrouter ;;
-        7) config_opencode ;;
-        8) config_groq ;;
-        9) config_mistral ;;
-        10) config_ollama ;;
-        11) config_azure_openai ;;
-        12) config_xai ;;
-        13) config_zai ;;
-        14) config_minimax ;;
-        15) config_google_gemini_cli ;;
-        16) config_google_antigravity ;;
-        0) return ;;
-        *) log_error "无效选择"; press_enter; config_ai_model ;;
+    read -p "$(echo -e "${YELLOW}请选择 [1-2] (默认: 1): ${NC}")" group_choice < "$TTY_INPUT"
+
+    local group="claude-code"
+    case "$group_choice" in
+        2) group="codex" ;;
+        *) group="claude-code" ;;
     esac
+
+    local current_key=""
+    local current_model=""
+    local current_fallback=""
+    if [ "$group" = "codex" ]; then
+        current_key="$codex_key"
+        current_model="$codex_model"
+        current_fallback="$codex_fallback"
+    else
+        current_key="$claude_key"
+        current_model="$claude_model"
+        current_fallback="$claude_fallback"
+    fi
+
+    echo ""
+    if [ -n "$current_key" ]; then
+        local masked_key="${current_key:0:8}...${current_key: -4}"
+        echo -e "当前 ${group} API Key: ${GRAY}$masked_key${NC}"
+    fi
+    read -p "$(echo -e "${YELLOW}输入 API Key (留空保持不变): ${NC}")" input_key < "$TTY_INPUT"
+
+    local api_key="$current_key"
+    if [ -n "$input_key" ]; then
+        api_key="$input_key"
+    fi
+
+    if [ -z "$api_key" ]; then
+        log_error "API Key 不能为空，请先配置 API Key"
+        press_enter
+        return
+    fi
+
+    echo ""
+    if [ -n "$current_model" ]; then
+        echo -e "${GRAY}当前主模型: $current_model${NC}"
+    fi
+    choose_tuzi_model "$group" primary_model
+
+    if [ -z "$primary_model" ]; then
+        log_error "模型名称不能为空"
+        press_enter
+        return
+    fi
+
+    echo ""
+    if confirm "是否配置备用模型？" "n"; then
+        choose_tuzi_model "$group" fallback_model
+    else
+        fallback_model=""
+    fi
+
+    save_tuzi_ai_config "$group" "$api_key" "$primary_model" "$fallback_model"
+
+    echo ""
+    log_info "Tuzi API 配置完成！"
+    log_info "分组: $group"
+    log_info "主模型: $primary_model"
+    [ -n "$fallback_model" ] && log_info "备用模型: $fallback_model"
+
+    echo ""
+    if confirm "是否测试 API 连接？" "y"; then
+        test_ai_connection "tuzi" "$api_key" "$primary_model" ""
+    fi
+
+    press_enter
 }
 
 config_anthropic() {
@@ -4186,6 +4624,74 @@ EOF
     log_info "环境变量已保存到: $env_file"
 }
 
+save_tuzi_ai_config() {
+    local group="$1"
+    local api_key="$2"
+    local primary_model="$3"
+    local fallback_model="$4"
+
+    ensure_openclaw_init
+
+    local env_file="$OPENCLAW_ENV"
+    local config_file="$OPENCLAW_JSON"
+    local settings
+    settings=$(get_tuzi_group_settings "$group")
+    local provider_id="${settings%%|*}"
+    local rest="${settings#*|}"
+    local base_url="${rest%%|*}"
+    rest="${rest#*|}"
+    local api_type="${rest%%|*}"
+
+    local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
+    local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
+    local claude_fallback=$(get_env_value "TUZI_CLAUDE_CODE_FALLBACK_MODEL")
+    local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
+    local codex_model=$(get_env_value "TUZI_CODEX_MODEL")
+    local codex_fallback=$(get_env_value "TUZI_CODEX_FALLBACK_MODEL")
+
+    if [ "$group" = "codex" ]; then
+        codex_key="$api_key"
+        codex_model="$primary_model"
+        codex_fallback="$fallback_model"
+    else
+        claude_key="$api_key"
+        claude_model="$primary_model"
+        claude_fallback="$fallback_model"
+    fi
+
+    write_tuzi_env_file "$group" "$provider_id" "$base_url" "$api_type" "$api_key" "$primary_model" "$fallback_model" \
+        "$claude_key" "$claude_model" "$claude_fallback" "$codex_key" "$codex_model" "$codex_fallback"
+
+    chmod 600 "$env_file"
+
+    if ! configure_tuzi_provider "$group" "$api_key" "$primary_model" "$fallback_model" "$config_file"; then
+        return 1
+    fi
+
+    if check_openclaw_installed; then
+        source "$env_file"
+        openclaw models set "$provider_id/$primary_model" 2>/dev/null || \
+            openclaw config set models.default "$provider_id/$primary_model" 2>/dev/null || true
+    fi
+
+    local shell_rc=""
+    if [ -f "$HOME/.zshrc" ]; then
+        shell_rc="$HOME/.zshrc"
+    elif [ -f "$HOME/.bashrc" ]; then
+        shell_rc="$HOME/.bashrc"
+    fi
+
+    if [ -n "$shell_rc" ]; then
+        if ! grep -q "source.*openclaw/env" "$shell_rc" 2>/dev/null; then
+            echo "" >> "$shell_rc"
+            echo "# OpenClaw 环境变量" >> "$shell_rc"
+            echo "[ -f \"$env_file\" ] && source \"$env_file\"" >> "$shell_rc"
+        fi
+    fi
+
+    log_info "环境变量已保存到: $env_file"
+}
+
 # 配置自定义 provider（用于支持自定义 API 地址）
 # 参数: provider api_key model base_url config_file [api_type]
 configure_custom_provider() {
@@ -4712,33 +5218,74 @@ quick_test_ai() {
     source "$OPENCLAW_ENV"
     
     local provider=""
+    local provider_label=""
     local api_key=""
     local base_url=""
     local model=""
-    
-    # 确定 provider
-    if [ -n "$ANTHROPIC_API_KEY" ]; then
+    local group=""
+    local api_type=""
+
+    local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
+    local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
+
+    if [ -n "$claude_key" ] || [ -n "$codex_key" ]; then
+        if [ -n "$claude_key" ] && [ -n "$codex_key" ]; then
+            echo -e "${YELLOW}选择要测试的 Tuzi 分组:${NC}"
+            print_menu_item "1" "Claude-Code" "🟣"
+            print_menu_item "2" "Codex" "🟢"
+            echo ""
+            read -p "$(echo -e "${YELLOW}请选择 [1-2] (默认: 1): ${NC}")" group_choice < "$TTY_INPUT"
+            case "$group_choice" in
+                2) group="codex" ;;
+                *) group="claude-code" ;;
+            esac
+        elif [ -n "$codex_key" ]; then
+            group="codex"
+        else
+            group="claude-code"
+        fi
+
+        local tuzi_config
+        tuzi_config=$(resolve_tuzi_group_test_config "$group")
+        provider="${tuzi_config%%|*}"
+        local rest="${tuzi_config#*|}"
+        provider_label="${rest%%|*}"
+        rest="${rest#*|}"
+        base_url="${rest%%|*}"
+        rest="${rest#*|}"
+        api_type="${rest%%|*}"
+        rest="${rest#*|}"
+        api_key="${rest%%|*}"
+        rest="${rest#*|}"
+        model="${rest%%|*}"
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
         provider="anthropic"
+        provider_label="Anthropic"
         api_key="$ANTHROPIC_API_KEY"
         base_url="$ANTHROPIC_BASE_URL"
     elif [ -n "$OPENAI_API_KEY" ]; then
         provider="openai"
+        provider_label="OpenAI"
         api_key="$OPENAI_API_KEY"
         base_url="$OPENAI_BASE_URL"
     elif [ -n "$GOOGLE_API_KEY" ]; then
         provider="google"
+        provider_label="Google"
         api_key="$GOOGLE_API_KEY"
         base_url="$GOOGLE_BASE_URL"
     elif [ -n "$GROQ_API_KEY" ]; then
         provider="groq"
+        provider_label="Groq"
         api_key="$GROQ_API_KEY"
         base_url="$GROQ_BASE_URL"
     elif [ -n "$MISTRAL_API_KEY" ]; then
         provider="mistral"
+        provider_label="Mistral"
         api_key="$MISTRAL_API_KEY"
         base_url="$MISTRAL_BASE_URL"
     elif [ -n "$OPENROUTER_API_KEY" ]; then
         provider="openrouter"
+        provider_label="OpenRouter"
         api_key="$OPENROUTER_API_KEY"
         base_url="$OPENROUTER_BASE_URL"
     fi
@@ -4750,15 +5297,17 @@ quick_test_ai() {
         return
     fi
     
-    # 获取当前模型
-    if check_openclaw_installed; then
-        model=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
+    if [ -z "$model" ] && check_openclaw_installed; then
+        model=$(get_openclaw_primary_model)
+        model="${model##*/}"
     fi
     
     echo -e "当前配置:"
-    echo -e "  提供商: ${WHITE}$provider${NC}"
+    echo -e "  提供商: ${WHITE}${provider_label:-$provider}${NC}"
+    [ -n "$group" ] && echo -e "  分组: ${WHITE}$provider_label${NC}"
     echo -e "  模型: ${WHITE}${model:-未知}${NC}"
     [ -n "$base_url" ] && echo -e "  API 地址: ${WHITE}$base_url${NC}"
+    [ -n "$api_type" ] && echo -e "  API 类型: ${WHITE}$api_type${NC}"
     
     test_ai_connection "$provider" "$api_key" "$model" "$base_url"
     
@@ -5009,8 +5558,68 @@ run_all_tests() {
     local api_key=""
     local base_url=""
     local model=""
-    
-    if [ -n "$ANTHROPIC_API_KEY" ]; then
+
+    local primary_model=$(get_openclaw_primary_model)
+    primary_model="${primary_model##*/}"
+
+    local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
+    local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
+
+    if [ -n "$claude_key" ] || [ -n "$codex_key" ]; then
+        local tuzi_groups=()
+        [ -n "$claude_key" ] && tuzi_groups+=("claude-code")
+        [ -n "$codex_key" ] && tuzi_groups+=("codex")
+
+        local group
+        for group in "${tuzi_groups[@]}"; do
+            local tuzi_config
+            tuzi_config=$(resolve_tuzi_group_test_config "$group")
+            local provider_id="${tuzi_config%%|*}"
+            local rest="${tuzi_config#*|}"
+            local group_label="${rest%%|*}"
+            rest="${rest#*|}"
+            local group_base_url="${rest%%|*}"
+            rest="${rest#*|}"
+            local group_api_type="${rest%%|*}"
+            rest="${rest#*|}"
+            local group_api_key="${rest%%|*}"
+            rest="${rest#*|}"
+            local group_model="${rest%%|*}"
+
+            if [ -z "$group_model" ]; then
+                group_model="$primary_model"
+            fi
+
+            if [ -z "$group_api_key" ] || [ "$group_api_key" = "your-api-key-here" ]; then
+                continue
+            fi
+
+            total_tests=$((total_tests + 1))
+            echo -e "${CYAN}[测试 $total_tests] AI API (${group_label})${NC}"
+
+            local http_code=""
+            case "$group_api_type" in
+                openai-responses)
+                    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${group_base_url:-https://api.tu-zi.com/v1}/responses" \
+                        -H "Authorization: Bearer $group_api_key" -H "Content-Type: application/json" \
+                        -d '{"model":"'$group_model'","input":"hi","max_output_tokens":10}' 2>/dev/null)
+                    ;;
+                *)
+                    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${group_base_url:-https://api.tu-zi.com}/v1/messages" \
+                        -H "x-api-key: $group_api_key" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+                        -d '{"model":"'$group_model'","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
+                    ;;
+            esac
+
+            if [ "$http_code" = "200" ]; then
+                log_info "${group_label} API 测试通过"
+                passed_tests=$((passed_tests + 1))
+            else
+                log_error "${group_label} API 测试失败 (HTTP $http_code)"
+            fi
+            echo ""
+        done
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
         provider="anthropic"
         api_key="$ANTHROPIC_API_KEY"
         base_url="$ANTHROPIC_BASE_URL"
@@ -5023,9 +5632,8 @@ run_all_tests() {
         api_key="$GOOGLE_API_KEY"
     fi
     
-    # 获取当前模型
-    if check_openclaw_installed; then
-        model=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
+    if [ -z "$model" ]; then
+        model="$primary_model"
     fi
     
     if [ -n "$provider" ] && [ -n "$api_key" ] && [ "$api_key" != "your-api-key-here" ]; then
@@ -5036,6 +5644,18 @@ run_all_tests() {
         local http_code=""
         
         case "$provider" in
+            tuzi)
+                if [ "$TUZI_GROUP" = "codex" ]; then
+                    test_url="${base_url:-https://api.tu-zi.com/v1}/responses"
+                    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$test_url" \
+                        -H "Authorization: Bearer $api_key" -H "Content-Type: application/json" \
+                        -d '{"model":"'$model'","input":"hi","max_output_tokens":10}' 2>/dev/null)
+                else
+                    http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base_url:-https://api.tu-zi.com}/v1/messages" \
+                        -H "x-api-key: $api_key" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \
+                        -d '{"model":"'$model'","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}' 2>/dev/null)
+                fi
+                ;;
             anthropic)
                 http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "https://api.anthropic.com/v1/messages" \
                     -H "x-api-key: $api_key" -H "anthropic-version: 2023-06-01" -H "Content-Type: application/json" \

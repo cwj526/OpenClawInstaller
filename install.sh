@@ -343,121 +343,321 @@ init_openclaw_config() {
 }
 
 # 配置 OpenClaw 使用的 AI 模型和 API Key
+get_tuzi_group_settings() {
+    local group="$1"
+    case "$group" in
+        codex)
+            echo "tuzi-codex|https://api.tu-zi.com/v1|openai-responses"
+            ;;
+        *)
+            echo "tuzi-claude-code|https://api.tu-zi.com|anthropic-messages"
+            ;;
+    esac
+}
+
+choose_tuzi_model() {
+    local group="$1"
+    local result_var="$2"
+    local models=()
+
+    if [ "$group" = "codex" ]; then
+        models=(
+            "gpt-5.4" "gpt-5.3-codex" "gpt-5.2-medium" "gpt-5.2-high"
+            "gpt-5.2-codex" "gpt-5.2" "gpt-5.1-high" "gpt-5.1-medium"
+            "gpt-5.1-low" "gpt-5.1-codex-max-high" "gpt-5.1-codex-max"
+            "gpt-5.1" "gpt-5-codex" "gpt-5-high" "gpt-5-low" "gpt-5"
+        )
+    else
+        models=(
+            "claude-sonnet-4-6" "claude-sonnet-4-6-thinking" "claude-sonnet-4-5-20250929-thinking"
+            "claude-sonnet-4-5-20250929" "claude-sonnet-4-20250514-thinking" "claude-sonnet-4-20250514"
+            "claude-opus-4-6" "claude-opus-4-5-20251101-thinking" "claude-opus-4-5-20251101"
+            "claude-opus-4-5" "claude-opus-4-20250514-thinking" "claude-opus-4-20250514"
+        )
+    fi
+
+    echo "选择模型:"
+    local i=1
+    for model in "${models[@]}"; do
+        echo "  $i) $model"
+        i=$((i + 1))
+    done
+    echo "  $i) 自定义模型名称"
+    echo -en "${YELLOW}选择模型 [1-$i] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
+    model_choice=${model_choice:-1}
+
+    local chosen_model=""
+    if [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
+        chosen_model="${models[$((model_choice - 1))]}"
+    else
+        echo -en "${YELLOW}输入模型名称: ${NC}"; read chosen_model < "$TTY_INPUT"
+    fi
+
+    printf -v "$result_var" '%s' "$chosen_model"
+}
+
+configure_tuzi_provider() {
+    local group="$1"
+    local api_key="$2"
+    local primary_model="$3"
+    local fallback_model="$4"
+    local config_file="$5"
+
+    local settings
+    settings=$(get_tuzi_group_settings "$group")
+    local provider_id="${settings%%|*}"
+    local rest="${settings#*|}"
+    local base_url="${rest%%|*}"
+    local api_type="${rest#*|}"
+
+    local config_success=false
+
+    if command -v node &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_tuzi_install_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "provider_id": "$provider_id",
+  "base_url": "$base_url",
+  "api_key": "$api_key",
+  "api_type": "$api_type",
+  "primary_model": "$primary_model",
+  "fallback_model": "$fallback_model"
+}
+EOFVARS
+        node -e "
+const fs = require('fs');
+const vars = JSON.parse(fs.readFileSync('$tmp_vars', 'utf8'));
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(vars.config_file, 'utf8'));
+} catch (e) {
+  config = {};
+}
+config.auth ??= {};
+config.auth.profiles ??= {};
+config.auth.profiles[vars.provider_id + ':default'] = { provider: vars.provider_id, mode: 'api_key' };
+config.models ??= {};
+config.models.providers ??= {};
+config.models.providers[vars.provider_id] = {
+  baseUrl: vars.base_url,
+  apiKey: vars.api_key,
+  api: vars.api_type,
+  models: [
+    {
+      id: vars.primary_model,
+      name: vars.primary_model,
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+    }
+  ]
+};
+if (vars.fallback_model) {
+  config.models.providers[vars.provider_id].models.push({
+    id: vars.fallback_model,
+    name: vars.fallback_model,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+  });
+}
+config.agents ??= {};
+config.agents.defaults ??= {};
+config.agents.defaults.model = {
+  primary: vars.provider_id + '/' + vars.primary_model,
+  fallbacks: vars.fallback_model ? [vars.provider_id + '/' + vars.fallback_model] : []
+};
+config.agents.defaults.models ??= {};
+config.agents.defaults.models[vars.provider_id + '/' + vars.primary_model] = {};
+if (vars.fallback_model) {
+  config.agents.defaults.models[vars.provider_id + '/' + vars.fallback_model] = {};
+}
+fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
+" 2>/dev/null
+        local node_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $node_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ] && command -v python3 &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_tuzi_install_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "provider_id": "$provider_id",
+  "base_url": "$base_url",
+  "api_key": "$api_key",
+  "api_type": "$api_type",
+  "primary_model": "$primary_model",
+  "fallback_model": "$fallback_model"
+}
+EOFVARS
+        python3 -c "
+import json
+import os
+with open('$tmp_vars', 'r') as f:
+    vars = json.load(f)
+config = {}
+if os.path.exists(vars['config_file']):
+    try:
+        with open(vars['config_file'], 'r') as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+config.setdefault('auth', {}).setdefault('profiles', {})[vars['provider_id'] + ':default'] = {
+    'provider': vars['provider_id'],
+    'mode': 'api_key'
+}
+provider_models = [{
+    'id': vars['primary_model'],
+    'name': vars['primary_model'],
+    'reasoning': False,
+    'input': ['text'],
+    'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+    'contextWindow': 200000,
+    'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
+}]
+if vars['fallback_model']:
+    provider_models.append({
+        'id': vars['fallback_model'],
+        'name': vars['fallback_model'],
+        'reasoning': False,
+        'input': ['text'],
+        'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+        'contextWindow': 200000,
+        'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
+    })
+config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']] = {
+    'baseUrl': vars['base_url'],
+    'apiKey': vars['api_key'],
+    'api': vars['api_type'],
+    'models': provider_models
+}
+defaults = config.setdefault('agents', {}).setdefault('defaults', {})
+defaults['model'] = {
+    'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
+    'fallbacks': [f\"{vars['provider_id']}/{vars['fallback_model']}\"] if vars['fallback_model'] else []
+}
+defaults.setdefault('models', {})[f\"{vars['provider_id']}/{vars['primary_model']}\"] = {}
+if vars['fallback_model']:
+    defaults['models'][f\"{vars['provider_id']}/{vars['fallback_model']}\"] = {}
+with open(vars['config_file'], 'w') as f:
+    json.dump(config, f, indent=2)
+" 2>/dev/null
+        local py_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $py_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ]; then
+        log_error "Tuzi Provider 写入失败（需要 node 或 python3）"
+        return 1
+    fi
+
+    return 0
+}
+
 configure_openclaw_model() {
     log_step "配置 OpenClaw AI 模型..."
     
     local env_file="$HOME/.openclaw/env"
     local openclaw_json="$HOME/.openclaw/openclaw.json"
-    
-    # 创建环境变量文件
+
+    local settings
+    settings=$(get_tuzi_group_settings "$TUZI_GROUP")
+    local provider_id="${settings%%|*}"
+    local rest="${settings#*|}"
+    local base_url="${rest%%|*}"
+    rest="${rest#*|}"
+    local api_type="${rest%%|*}"
+
+    local claude_key=""
+    local claude_model=""
+    local claude_fallback=""
+    local codex_key=""
+    local codex_model=""
+    local codex_fallback=""
+    if [ -f "$env_file" ]; then
+        source "$env_file"
+        claude_key="$TUZI_CLAUDE_CODE_API_KEY"
+        claude_model="$TUZI_CLAUDE_CODE_MODEL"
+        claude_fallback="$TUZI_CLAUDE_CODE_FALLBACK_MODEL"
+        codex_key="$TUZI_CODEX_API_KEY"
+        codex_model="$TUZI_CODEX_MODEL"
+        codex_fallback="$TUZI_CODEX_FALLBACK_MODEL"
+    fi
+
+    if [ "$TUZI_GROUP" = "codex" ]; then
+        codex_key="$AI_KEY"
+        codex_model="$AI_MODEL"
+        codex_fallback="$AI_FALLBACK_MODEL"
+    else
+        claude_key="$AI_KEY"
+        claude_model="$AI_MODEL"
+        claude_fallback="$AI_FALLBACK_MODEL"
+    fi
+
     cat > "$env_file" << EOF
 # OpenClaw 环境变量配置
 # 由安装脚本自动生成: $(date '+%Y-%m-%d %H:%M:%S')
+export TUZI_API_KEY=$AI_KEY
+export TUZI_GROUP=$TUZI_GROUP
+export TUZI_PROVIDER_ID=$provider_id
+export TUZI_BASE_URL=$base_url
+export TUZI_API_TYPE=$api_type
+export TUZI_MODEL=$AI_MODEL
 EOF
 
-    # 根据 AI_PROVIDER 设置对应的环境变量
-    case "$AI_PROVIDER" in
-        anthropic)
-            echo "export ANTHROPIC_API_KEY=$AI_KEY" >> "$env_file"
-            [ -n "$BASE_URL" ] && echo "export ANTHROPIC_BASE_URL=$BASE_URL" >> "$env_file"
-            ;;
-        openai)
-            echo "export OPENAI_API_KEY=$AI_KEY" >> "$env_file"
-            [ -n "$BASE_URL" ] && echo "export OPENAI_BASE_URL=$BASE_URL" >> "$env_file"
-            ;;
-        deepseek)
-            echo "export DEEPSEEK_API_KEY=$AI_KEY" >> "$env_file"
-            echo "export DEEPSEEK_BASE_URL=${BASE_URL:-https://api.deepseek.com}" >> "$env_file"
-            ;;
-        kimi)
-            echo "export MOONSHOT_API_KEY=$AI_KEY" >> "$env_file"
-            echo "export MOONSHOT_BASE_URL=${BASE_URL:-https://api.moonshot.cn/v1}" >> "$env_file"
-            ;;
-        google)
-            echo "export GOOGLE_API_KEY=$AI_KEY" >> "$env_file"
-            [ -n "$BASE_URL" ] && echo "export GOOGLE_BASE_URL=$BASE_URL" >> "$env_file"
-            ;;
-        groq)
-            echo "export OPENAI_API_KEY=$AI_KEY" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${BASE_URL:-https://api.groq.com/openai/v1}" >> "$env_file"
-            ;;
-        mistral)
-            echo "export OPENAI_API_KEY=$AI_KEY" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${BASE_URL:-https://api.mistral.ai/v1}" >> "$env_file"
-            ;;
-        openrouter)
-            echo "export OPENAI_API_KEY=$AI_KEY" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${BASE_URL:-https://openrouter.ai/api/v1}" >> "$env_file"
-            ;;
-        ollama)
-            echo "export OLLAMA_HOST=${BASE_URL:-http://localhost:11434}" >> "$env_file"
-            ;;
-    esac
+    if [ -n "$AI_FALLBACK_MODEL" ]; then
+        echo "export TUZI_FALLBACK_MODEL=$AI_FALLBACK_MODEL" >> "$env_file"
+    fi
+    if [ -n "$claude_key" ]; then
+        echo "export TUZI_CLAUDE_CODE_API_KEY=$claude_key" >> "$env_file"
+    fi
+    if [ -n "$claude_model" ]; then
+        echo "export TUZI_CLAUDE_CODE_MODEL=$claude_model" >> "$env_file"
+    fi
+    if [ -n "$claude_fallback" ]; then
+        echo "export TUZI_CLAUDE_CODE_FALLBACK_MODEL=$claude_fallback" >> "$env_file"
+    fi
+    if [ -n "$codex_key" ]; then
+        echo "export TUZI_CODEX_API_KEY=$codex_key" >> "$env_file"
+    fi
+    if [ -n "$codex_model" ]; then
+        echo "export TUZI_CODEX_MODEL=$codex_model" >> "$env_file"
+    fi
+    if [ -n "$codex_fallback" ]; then
+        echo "export TUZI_CODEX_FALLBACK_MODEL=$codex_fallback" >> "$env_file"
+    fi
     
     chmod 600 "$env_file"
     log_info "环境变量配置已保存到: $env_file"
     
-    # 设置默认模型
+    configure_tuzi_provider "$TUZI_GROUP" "$AI_KEY" "$AI_MODEL" "$AI_FALLBACK_MODEL" "$openclaw_json"
+
     if check_command openclaw; then
-        local openclaw_model=""
-        local use_custom_provider=false
-        
-        # 如果使用自定义 BASE_URL，需要配置自定义 provider
-        if [ -n "$BASE_URL" ] && [ "$AI_PROVIDER" = "anthropic" ]; then
-            use_custom_provider=true
-            configure_custom_provider "$AI_PROVIDER" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json"
-            openclaw_model="anthropic-custom/$AI_MODEL"
-        elif [ -n "$BASE_URL" ] && [ "$AI_PROVIDER" = "openai" ]; then
-            use_custom_provider=true
-            # 传递 API 类型参数（如果已设置）
-            configure_custom_provider "$AI_PROVIDER" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json" "$AI_API_TYPE"
-            openclaw_model="openai-custom/$AI_MODEL"
+        source "$env_file"
+        local openclaw_model="$provider_id/$AI_MODEL"
+        local set_result
+        set_result=$(openclaw models set "$openclaw_model" 2>&1) || true
+        local set_exit=$?
+
+        if [ $set_exit -eq 0 ]; then
+            log_info "默认模型已设置为: $openclaw_model"
         else
-            case "$AI_PROVIDER" in
-                anthropic)
-                    openclaw_model="anthropic/$AI_MODEL"
-                    ;;
-                openai|groq|mistral)
-                    openclaw_model="openai/$AI_MODEL"
-                    ;;
-                deepseek)
-                    openclaw_model="deepseek/$AI_MODEL"
-                    ;;
-                kimi)
-                    openclaw_model="kimi/$AI_MODEL"
-                    ;;
-                openrouter)
-                    openclaw_model="openrouter/$AI_MODEL"
-                    ;;
-                google)
-                    openclaw_model="google/$AI_MODEL"
-                    ;;
-                ollama)
-                    openclaw_model="ollama/$AI_MODEL"
-                    ;;
-            esac
-        fi
-        
-        if [ -n "$openclaw_model" ]; then
-            # 加载环境变量
-            source "$env_file"
-            
-            # 设置默认模型（显示错误信息以便调试）
-            # 添加 || true 防止 set -e 导致脚本退出
-            local set_result
-            set_result=$(openclaw models set "$openclaw_model" 2>&1) || true
-            local set_exit=$?
-            
-            if [ $set_exit -eq 0 ]; then
-                log_info "默认模型已设置为: $openclaw_model"
-            else
-                log_warn "模型设置可能失败: $openclaw_model"
-                echo -e "  ${GRAY}$set_result${NC}" | head -3
-                
-                # 尝试直接使用 config set
-                log_info "尝试使用 config set 设置模型..."
-                openclaw config set models.default "$openclaw_model" 2>/dev/null || true
-            fi
+            log_warn "模型设置可能失败: $openclaw_model"
+            echo -e "  ${GRAY}$set_result${NC}" | head -3
+            log_info "尝试使用 config set 设置模型..."
+            openclaw config set models.default "$openclaw_model" 2>/dev/null || true
         fi
     fi
     
@@ -799,7 +999,11 @@ run_onboard_wizard() {
                 source "$env_file"
                 # 获取当前模型
                 AI_MODEL=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
-                if [ -n "$ANTHROPIC_API_KEY" ]; then
+                if [ -n "$TUZI_API_KEY" ]; then
+                    AI_PROVIDER="tuzi"
+                    AI_KEY="$TUZI_API_KEY"
+                    BASE_URL="$TUZI_BASE_URL"
+                elif [ -n "$ANTHROPIC_API_KEY" ]; then
                     AI_PROVIDER="anthropic"
                     AI_KEY="$ANTHROPIC_API_KEY"
                     BASE_URL="$ANTHROPIC_BASE_URL"
@@ -818,10 +1022,9 @@ run_onboard_wizard() {
         echo ""
     else
         echo -e "${CYAN}接下来将引导你完成核心配置，包括:${NC}"
-        echo "  1. 选择 AI 模型提供商"
-        echo "  2. 配置 API 连接"
-        echo "  3. 测试 API 连接"
-        echo "  4. 设置基本身份信息"
+        echo "  1. 配置 Tuzi API"
+        echo "  2. 测试 API 连接"
+        echo "  3. 设置基本身份信息"
         echo ""
     fi
     
@@ -857,272 +1060,42 @@ run_onboard_wizard() {
 setup_ai_provider() {
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${WHITE}  第 1 步: 选择 AI 模型提供商${NC}"
+    echo -e "${WHITE}  第 1 步: 配置 Tuzi API${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "  1) 🟣 Anthropic Claude"
-    echo "  2) 🟢 OpenAI GPT"
-    echo "  3) 🔵 DeepSeek"
-    echo "  4) 🌙 Kimi (Moonshot)"
-    echo "  5) 🔴 Google Gemini"
-    echo "  6) 🔄 OpenRouter (多模型网关)"
-    echo "  7) ⚡ Groq (超快推理)"
-    echo "  8) 🌬️ Mistral AI"
-    echo "  9) 🟠 Ollama (本地模型)"
+    echo -e "${WHITE}当前安装流程仅支持 Tuzi API 快速接入${NC}"
+    echo -e "${GRAY}获取 Key: https://api.tu-zi.com/token${NC}"
     echo ""
-    echo -e "${GRAY}提示: 支持自定义 API 地址（通过 openclaw.json 配置自定义 Provider）${NC}"
+    echo "  1) 🟣 Claude-Code"
+    echo "  2) 🟢 Codex"
     echo ""
-    echo -en "${YELLOW}请选择 AI 提供商 [1-9] (默认: 1): ${NC}"; read ai_choice < "$TTY_INPUT"
-    ai_choice=${ai_choice:-1}
-    
-    case $ai_choice in
-        1)
-            AI_PROVIDER="anthropic"
-            echo ""
-            echo -e "${CYAN}配置 Anthropic Claude${NC}"
-            echo -e "${GRAY}官方 API: https://console.anthropic.com/${NC}"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方 API): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo "选择模型:"
-            echo "  1) claude-sonnet-4-5-20250929 (推荐)"
-            echo "  2) claude-opus-4-5-20251101 (最强)"
-            echo "  3) claude-haiku-4-5-20251001 (快速)"
-            echo "  4) claude-sonnet-4-20250514 (上一代)"
-            echo "  5) 自定义模型名称"
-            echo -en "${YELLOW}选择模型 [1-5] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="claude-opus-4-5-20251101" ;;
-                3) AI_MODEL="claude-haiku-4-5-20251001" ;;
-                4) AI_MODEL="claude-sonnet-4-20250514" ;;
-                5) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="claude-sonnet-4-5-20250929" ;;
-            esac
-            ;;
-        2)
-            AI_PROVIDER="openai"
-            echo ""
-            echo -e "${CYAN}配置 OpenAI GPT${NC}"
-            echo -e "${GRAY}官方 API: https://platform.openai.com/${NC}"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方 API): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo "选择模型:"
-            echo "  1) gpt-5 (推荐)"
-            echo "  2) gpt-5-mini (经济)"
-            echo "  3) gpt-4o"
-            echo "  4) gpt-4o-mini"
-            echo "  5) 自定义模型名称"
-            echo -en "${YELLOW}选择模型 [1-5] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="gpt-5-mini" ;;
-                3) AI_MODEL="gpt-4o" ;;
-                4) AI_MODEL="gpt-4o-mini" ;;
-                5) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="gpt-5" ;;
-            esac
-            # 如果使用自定义 API 地址，询问 API 类型
-            AI_API_TYPE=""
-            if [ -n "$BASE_URL" ]; then
-                echo ""
-                echo -e "${CYAN}选择 API 兼容格式:${NC}"
-                echo "  1) openai-responses (OpenAI 官方 Responses API)"
-                echo "  2) openai-completions (兼容 /v1/chat/completions 端点)"
-                echo -e "${GRAY}提示: 大多数第三方服务使用 openai-completions 格式${NC}"
-                echo -en "${YELLOW}选择 API 格式 [1-2] (默认: 2): ${NC}"; read api_type_choice < "$TTY_INPUT"
-                case $api_type_choice in
-                    1) AI_API_TYPE="openai-responses" ;;
-                    *) AI_API_TYPE="openai-completions" ;;
-                esac
-            fi
-            ;;
-        3)
-            AI_PROVIDER="deepseek"
-            echo ""
-            echo -e "${CYAN}配置 DeepSeek${NC}"
-            echo -e "${GRAY}官方 API: https://platform.deepseek.com/${NC}"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方 API): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"https://api.deepseek.com"}
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo "选择模型:"
-            echo "  1) deepseek-chat (V3.2, 推荐)"
-            echo "  2) deepseek-reasoner (R1, 推理)"
-            echo "  3) deepseek-coder"
-            echo "  4) 自定义模型名称"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="deepseek-reasoner" ;;
-                3) AI_MODEL="deepseek-coder" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="deepseek-chat" ;;
-            esac
-            ;;
-        4)
-            AI_PROVIDER="kimi"
-            echo ""
-            echo -e "${CYAN}配置 Kimi (Moonshot)${NC}"
-            echo -e "${GRAY}官方 API: https://platform.moonshot.cn/${NC}"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方 API): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"https://api.moonshot.cn/v1"}
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo "选择模型:"
-            echo "  1) moonshot-v1-auto (自动, 推荐)"
-            echo "  2) moonshot-v1-8k"
-            echo "  3) moonshot-v1-32k"
-            echo "  4) moonshot-v1-128k"
-            echo "  5) 自定义模型名称"
-            echo -en "${YELLOW}选择模型 [1-5] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="moonshot-v1-8k" ;;
-                3) AI_MODEL="moonshot-v1-32k" ;;
-                4) AI_MODEL="moonshot-v1-128k" ;;
-                5) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="moonshot-v1-auto" ;;
-            esac
-            ;;
-        5)
-            AI_PROVIDER="google"
-            echo ""
-            echo -e "${CYAN}配置 Google Gemini${NC}"
-            echo -e "${GRAY}获取 API Key: https://aistudio.google.com/apikey${NC}"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            echo ""
-            echo "选择模型:"
-            echo "  1) gemini-2.0-flash (推荐)"
-            echo "  2) gemini-1.5-pro"
-            echo "  3) gemini-1.5-flash"
-            echo "  4) 自定义"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="gemini-1.5-pro" ;;
-                3) AI_MODEL="gemini-1.5-flash" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="gemini-2.0-flash" ;;
-            esac
-            ;;
-        6)
-            AI_PROVIDER="openrouter"
-            echo ""
-            echo -e "${CYAN}配置 OpenRouter${NC}"
-            echo -e "${GRAY}获取 API Key: https://openrouter.ai/${NC}"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"https://openrouter.ai/api/v1"}
-            echo ""
-            echo "选择模型:"
-            echo "  1) anthropic/claude-sonnet-4 (推荐)"
-            echo "  2) openai/gpt-4o"
-            echo "  3) google/gemini-pro-1.5"
-            echo "  4) 自定义"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="openai/gpt-4o" ;;
-                3) AI_MODEL="google/gemini-pro-1.5" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="anthropic/claude-sonnet-4" ;;
-            esac
-            ;;
-        7)
-            AI_PROVIDER="groq"
-            echo ""
-            echo -e "${CYAN}配置 Groq${NC}"
-            echo -e "${GRAY}获取 API Key: https://console.groq.com/${NC}"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"https://api.groq.com/openai/v1"}
-            echo ""
-            echo "选择模型:"
-            echo "  1) llama-3.3-70b-versatile (推荐)"
-            echo "  2) llama-3.1-8b-instant"
-            echo "  3) mixtral-8x7b-32768"
-            echo "  4) 自定义"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="llama-3.1-8b-instant" ;;
-                3) AI_MODEL="mixtral-8x7b-32768" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="llama-3.3-70b-versatile" ;;
-            esac
-            ;;
-        8)
-            AI_PROVIDER="mistral"
-            echo ""
-            echo -e "${CYAN}配置 Mistral AI${NC}"
-            echo -e "${GRAY}获取 API Key: https://console.mistral.ai/${NC}"
-            echo ""
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo ""
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"https://api.mistral.ai/v1"}
-            echo ""
-            echo "选择模型:"
-            echo "  1) mistral-large-latest (推荐)"
-            echo "  2) mistral-small-latest"
-            echo "  3) codestral-latest"
-            echo "  4) 自定义"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="mistral-small-latest" ;;
-                3) AI_MODEL="codestral-latest" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="mistral-large-latest" ;;
-            esac
-            ;;
-        9)
-            AI_PROVIDER="ollama"
-            AI_KEY=""
-            echo ""
-            echo -e "${CYAN}配置 Ollama 本地模型${NC}"
-            echo ""
-            echo -en "${YELLOW}Ollama 地址 (默认: http://localhost:11434): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            BASE_URL=${BASE_URL:-"http://localhost:11434"}
-            echo ""
-            echo "选择模型:"
-            echo "  1) llama3"
-            echo "  2) llama3:70b"
-            echo "  3) mistral"
-            echo "  4) 自定义"
-            echo -en "${YELLOW}选择模型 [1-4] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
-            case $model_choice in
-                2) AI_MODEL="llama3:70b" ;;
-                3) AI_MODEL="mistral" ;;
-                4) echo -en "${YELLOW}输入模型名称: ${NC}"; read AI_MODEL < "$TTY_INPUT" ;;
-                *) AI_MODEL="llama3" ;;
-            esac
-            ;;
-        *)
-            # 默认使用 Anthropic
-            AI_PROVIDER="anthropic"
-            echo ""
-            echo -e "${CYAN}配置 Anthropic Claude${NC}"
-            echo -en "${YELLOW}自定义 API 地址 (留空使用官方): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            AI_MODEL="claude-sonnet-4-20250514"
-            ;;
+    echo -en "${YELLOW}请选择 Tuzi 分组 [1-2] (默认: 1): ${NC}"; read group_choice < "$TTY_INPUT"
+    case "$group_choice" in
+        2) TUZI_GROUP="codex" ;;
+        *) TUZI_GROUP="claude-code" ;;
     esac
+
+    echo ""
+    echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
+    echo ""
+    choose_tuzi_model "$TUZI_GROUP" AI_MODEL
+    echo ""
+    if confirm "是否配置备用模型？" "n"; then
+        choose_tuzi_model "$TUZI_GROUP" AI_FALLBACK_MODEL
+    else
+        AI_FALLBACK_MODEL=""
+    fi
+
+    AI_PROVIDER="tuzi"
+    BASE_URL=""
+    AI_API_TYPE=""
     
     echo ""
     log_info "AI Provider 配置完成"
-    echo -e "  提供商: ${WHITE}$AI_PROVIDER${NC}"
+    echo -e "  提供商: ${WHITE}Tuzi API${NC}"
+    echo -e "  分组: ${WHITE}$TUZI_GROUP${NC}"
     echo -e "  模型: ${WHITE}$AI_MODEL${NC}"
-    [ -n "$BASE_URL" ] && echo -e "  API 地址: ${WHITE}$BASE_URL${NC}"
+    [ -n "$AI_FALLBACK_MODEL" ] && echo -e "  备用模型: ${WHITE}$AI_FALLBACK_MODEL${NC}"
 }
 
 # ================================ API 连接测试 ================================
