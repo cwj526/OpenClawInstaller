@@ -6,7 +6,8 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License">
 </p>
 
-> 🚀 一键部署你的私人 AI 助手 OpenClaw，内置 Tuzi API 快速接入
+> 🚀 一键部署你的私人 AI 助手 OpenClaw，内置 [Tuzi API](https://api.tu-zi.com/) 快速接入
+
 
 <p align="center">
   <img src="photo/menu.png" alt="OpenClaw 配置中心" width="600">
@@ -34,25 +35,6 @@
 | 磁盘空间 | 最低 1GB |
 
 ## 🚀 快速开始
-
-### 🖥️ 桌面版 OpenClaw Manager（推荐）
-
-如果你更喜欢图形界面，推荐使用 **OpenClaw Manager** 桌面应用：
-
-<p align="center">
-  <a href="https://github.com/miaoxworld/openclaw-manager">
-    <img src="https://img.shields.io/badge/下载桌面版-OpenClaw%20Manager-blue?style=for-the-badge&logo=github" alt="Download">
-  </a>
-</p>
-
-- 🎨 **现代化 UI** - 基于 Tauri 2.0 + React + TypeScript + Rust 构建
-- 📊 **实时监控** - 仪表盘查看服务状态、内存、运行时间
-- 🔧 **可视化配置** - AI 模型、消息渠道一键配置
-- 💻 **跨平台** - 支持 macOS、Windows、Linux
-
-👉 **下载地址**: [github.com/miaoxworld/openclaw-manager](https://github.com/miaoxworld/openclaw-manager)
-
----
 
 ### 方式一：一键安装（命令行版）
 
