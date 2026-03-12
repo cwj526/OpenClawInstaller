@@ -408,6 +408,7 @@ get_tuzi_group_settings() {
 choose_tuzi_model() {
     local group="$1"
     local result_var="$2"
+    local allow_finish="${3:-false}"
     local models=()
 
     if [ "$group" = "codex" ]; then
@@ -433,11 +434,19 @@ choose_tuzi_model() {
         i=$((i + 1))
     done
     echo "  $i) 自定义模型名称"
-    echo -en "${YELLOW}选择模型 [1-$i] (默认: 1): ${NC}"; read model_choice < "$TTY_INPUT"
+    if [ "$allow_finish" = "true" ]; then
+        echo "  0) 完成选择"
+        echo -en "${YELLOW}选择模型 [0-$i] (默认: 1): ${NC}"
+    else
+        echo -en "${YELLOW}选择模型 [1-$i] (默认: 1): ${NC}"
+    fi
+    read model_choice < "$TTY_INPUT"
     model_choice=${model_choice:-1}
 
     local chosen_model=""
-    if [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
+    if [ "$allow_finish" = "true" ] && [ "$model_choice" = "0" ]; then
+        chosen_model="__DONE__"
+    elif [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
         chosen_model="${models[$((model_choice - 1))]}"
     else
         echo -en "${YELLOW}输入模型名称: ${NC}"; read chosen_model < "$TTY_INPUT"
@@ -453,7 +462,12 @@ choose_tuzi_models() {
     local chosen_model=""
 
     while true; do
-        choose_tuzi_model "$group" chosen_model
+        local allow_finish="false"
+        [ ${#selected_models[@]} -gt 0 ] && allow_finish="true"
+        choose_tuzi_model "$group" chosen_model "$allow_finish"
+        if [ "$chosen_model" = "__DONE__" ]; then
+            break
+        fi
         if [ -z "$chosen_model" ]; then
             continue
         fi
@@ -474,9 +488,6 @@ choose_tuzi_models() {
             log_info "已添加模型: $chosen_model"
         fi
 
-        if ! confirm "是否继续添加模型？" "n"; then
-            break
-        fi
         echo ""
     done
 
