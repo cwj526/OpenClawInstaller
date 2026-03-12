@@ -57,7 +57,7 @@
 ### 方式一：一键安装（命令行版）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/install.sh | bash
 ```
 
 安装脚本会自动：
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/i
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/miaoxworld/OpenClawInstaller.git
+git clone https://github.com/cwj526/OpenClawInstaller.git
 cd OpenClawInstaller
 
 # 2. 添加执行权限
@@ -106,7 +106,7 @@ openclaw gateway start
 bash ~/.openclaw/config-menu.sh
 
 # 或从 GitHub 下载运行
-curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/config-menu.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/config-menu.sh | bash
 ```
 
 ## ✨ 功能特性
@@ -166,8 +166,8 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/c
 
 1. 选择 Tuzi API 分组：`Claude-Code` 或 `Codex`
 2. 输入该分组专用的 API Key
-3. 从预置模型列表中选择主模型
-4. 可选配置备用模型，也支持自定义模型名称
+3. 从预置模型列表中连续选择一个或多个模型
+4. 第一个模型会作为默认模型，其余模型会自动写入 fallback 列表，也支持自定义模型名称
 5. 如有需要，可再次进入配置流程添加另一个分组
 6. 脚本会自动写入 `~/.openclaw/openclaw.json` 并设置最后一次配置的分组为当前默认模型
 
@@ -503,9 +503,9 @@ rm -rf ~/.openclaw
 - [OpenClaw 官网](https://clawd.bot)
 - [官方文档](https://clawd.bot/docs)
 - [🖥️ OpenClaw Manager 桌面版](https://github.com/miaoxworld/openclaw-manager) - 图形界面管理工具
-- [安装工具仓库](https://github.com/miaoxworld/OpenClawInstaller) - 命令行版本
+- [安装工具仓库](https://github.com/cwj526/OpenClawInstaller) - 命令行版本
 - [OpenClaw 主仓库](https://github.com/openclaw/openclaw)
-- [社区讨论](https://github.com/miaoxworld/OpenClawInstaller/discussions)
+- [社区讨论](https://github.com/cwj526/OpenClawInstaller/discussions)
 
 ---
 

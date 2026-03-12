@@ -290,9 +290,9 @@ resolve_tuzi_group_test_config() {
 
     local api_key=$(get_env_value "${env_prefix}_API_KEY")
     local model=$(get_env_value "${env_prefix}_MODEL")
-    local fallback_model=$(get_env_value "${env_prefix}_FALLBACK_MODEL")
+    local models=$(get_env_value "${env_prefix}_MODELS")
 
-    echo "${provider_id}|${group_label}|${base_url}|${api_type}|${api_key}|${model}|${fallback_model}|${env_prefix}"
+    echo "${provider_id}|${group_label}|${base_url}|${api_type}|${api_key}|${model}|${models}|${env_prefix}"
 }
 
 choose_tuzi_model() {
@@ -359,6 +359,53 @@ choose_tuzi_model() {
     printf -v "$result_var" '%s' "$chosen_model"
 }
 
+choose_tuzi_models() {
+    local group="$1"
+    local result_var="$2"
+    local selected_models=()
+    local chosen_model=""
+
+    while true; do
+        choose_tuzi_model "$group" chosen_model
+        if [ -z "$chosen_model" ]; then
+            continue
+        fi
+
+        local already_selected=false
+        local model
+        for model in "${selected_models[@]}"; do
+            if [ "$model" = "$chosen_model" ]; then
+                already_selected=true
+                break
+            fi
+        done
+
+        if [ "$already_selected" = true ]; then
+            log_warn "模型已添加: $chosen_model"
+        else
+            selected_models+=("$chosen_model")
+            log_info "已添加模型: $chosen_model"
+        fi
+
+        if ! confirm "是否继续添加模型？" "n"; then
+            break
+        fi
+        echo ""
+    done
+
+    local joined_models=""
+    local idx
+    for idx in "${!selected_models[@]}"; do
+        if [ -n "$joined_models" ]; then
+            joined_models="${joined_models},${selected_models[$idx]}"
+        else
+            joined_models="${selected_models[$idx]}"
+        fi
+    done
+
+    printf -v "$result_var" '%s' "$joined_models"
+}
+
 write_tuzi_env_file() {
     local active_group="$1"
     local active_provider_id="$2"
@@ -366,15 +413,15 @@ write_tuzi_env_file() {
     local active_api_type="$4"
     local active_api_key="$5"
     local active_model="$6"
-    local active_fallback="$7"
+    local active_models="$7"
 
     local env_file="$OPENCLAW_ENV"
     local claude_key="$8"
     local claude_model="$9"
-    local claude_fallback="${10}"
+    local claude_models="${10}"
     local codex_key="${11}"
     local codex_model="${12}"
-    local codex_fallback="${13}"
+    local codex_models="${13}"
 
     cat > "$env_file" << EOF
 # OpenClaw 环境变量配置
@@ -387,8 +434,8 @@ export TUZI_API_TYPE=$active_api_type
 export TUZI_MODEL=$active_model
 EOF
 
-    if [ -n "$active_fallback" ]; then
-        echo "export TUZI_FALLBACK_MODEL=$active_fallback" >> "$env_file"
+    if [ -n "$active_models" ]; then
+        echo "export TUZI_MODELS=$active_models" >> "$env_file"
     fi
     if [ -n "$claude_key" ]; then
         echo "export TUZI_CLAUDE_CODE_API_KEY=$claude_key" >> "$env_file"
@@ -396,8 +443,8 @@ EOF
     if [ -n "$claude_model" ]; then
         echo "export TUZI_CLAUDE_CODE_MODEL=$claude_model" >> "$env_file"
     fi
-    if [ -n "$claude_fallback" ]; then
-        echo "export TUZI_CLAUDE_CODE_FALLBACK_MODEL=$claude_fallback" >> "$env_file"
+    if [ -n "$claude_models" ]; then
+        echo "export TUZI_CLAUDE_CODE_MODELS=$claude_models" >> "$env_file"
     fi
     if [ -n "$codex_key" ]; then
         echo "export TUZI_CODEX_API_KEY=$codex_key" >> "$env_file"
@@ -405,8 +452,8 @@ EOF
     if [ -n "$codex_model" ]; then
         echo "export TUZI_CODEX_MODEL=$codex_model" >> "$env_file"
     fi
-    if [ -n "$codex_fallback" ]; then
-        echo "export TUZI_CODEX_FALLBACK_MODEL=$codex_fallback" >> "$env_file"
+    if [ -n "$codex_models" ]; then
+        echo "export TUZI_CODEX_MODELS=$codex_models" >> "$env_file"
     fi
 }
 
@@ -414,7 +461,7 @@ configure_tuzi_provider() {
     local group="$1"
     local api_key="$2"
     local primary_model="$3"
-    local fallback_model="$4"
+    local models_csv="$4"
     local config_file="$5"
 
     local settings
@@ -445,7 +492,7 @@ configure_tuzi_provider() {
   "api_key": "$api_key",
   "api_type": "$api_type",
   "primary_model": "$primary_model",
-  "fallback_model": "$fallback_model",
+  "models_csv": "$models_csv",
   "group_label": "$group_label",
   "env_prefix": "$env_prefix"
 }
@@ -471,46 +518,37 @@ config.auth.profiles[vars.provider_id + ':default'] = {
 
 config.models ??= {};
 config.models.providers ??= {};
+const modelIds = (vars.models_csv || vars.primary_model)
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+const providerModels = modelIds.map((modelId) => ({
+  id: modelId,
+  name: modelId,
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+}));
 config.models.providers[vars.provider_id] = {
   baseUrl: vars.base_url,
   apiKey: vars.api_key,
   api: vars.api_type,
-  models: [
-    {
-      id: vars.primary_model,
-      name: vars.primary_model,
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
-    }
-  ]
+  models: providerModels
 };
-
-if (vars.fallback_model) {
-  config.models.providers[vars.provider_id].models.push({
-    id: vars.fallback_model,
-    name: vars.fallback_model,
-    reasoning: false,
-    input: ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
-  });
-}
 
 config.agents ??= {};
 config.agents.defaults ??= {};
+const fallbackModels = modelIds.slice(1).map((modelId) => vars.provider_id + '/' + modelId);
 config.agents.defaults.model = {
   primary: vars.provider_id + '/' + vars.primary_model,
-  fallbacks: vars.fallback_model ? [vars.provider_id + '/' + vars.fallback_model] : []
+  fallbacks: fallbackModels
 };
 config.agents.defaults.models ??= {};
-config.agents.defaults.models[vars.provider_id + '/' + vars.primary_model] = {};
-if (vars.fallback_model) {
-  config.agents.defaults.models[vars.provider_id + '/' + vars.fallback_model] = {};
-}
+modelIds.forEach((modelId) => {
+  config.agents.defaults.models[vars.provider_id + '/' + modelId] = {};
+});
 
 fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
 console.log('Tuzi provider configured: ' + vars.group_label);
@@ -532,7 +570,7 @@ console.log('Tuzi provider configured: ' + vars.group_label);
   "api_key": "$api_key",
   "api_type": "$api_type",
   "primary_model": "$primary_model",
-  "fallback_model": "$fallback_model",
+  "models_csv": "$models_csv",
   "env_prefix": "$env_prefix"
 }
 EOFVARS
@@ -557,25 +595,16 @@ config.setdefault('auth', {}).setdefault('profiles', {})[vars['provider_id'] + '
     'mode': 'api_key'
 }
 
+model_ids = [item.strip() for item in (vars.get('models_csv') or vars['primary_model']).split(',') if item.strip()]
 provider_models = [{
-    'id': vars['primary_model'],
-    'name': vars['primary_model'],
+    'id': model_id,
+    'name': model_id,
     'reasoning': False,
     'input': ['text'],
     'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
     'contextWindow': 200000,
     'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
-}]
-if vars['fallback_model']:
-    provider_models.append({
-        'id': vars['fallback_model'],
-        'name': vars['fallback_model'],
-        'reasoning': False,
-        'input': ['text'],
-        'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
-        'contextWindow': 200000,
-        'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
-    })
+} for model_id in model_ids]
 
 config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']] = {
     'baseUrl': vars['base_url'],
@@ -587,11 +616,11 @@ config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']]
 defaults = config.setdefault('agents', {}).setdefault('defaults', {})
 defaults['model'] = {
     'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
-    'fallbacks': [f\"{vars['provider_id']}/{vars['fallback_model']}\"] if vars['fallback_model'] else []
+    'fallbacks': [f\"{vars['provider_id']}/{model_id}\" for model_id in model_ids[1:]]
 }
-defaults.setdefault('models', {})[f\"{vars['provider_id']}/{vars['primary_model']}\"] = {}
-if vars['fallback_model']:
-    defaults['models'][f\"{vars['provider_id']}/{vars['fallback_model']}\"] = {}
+defaults.setdefault('models', {})
+for model_id in model_ids:
+    defaults['models'][f\"{vars['provider_id']}/{model_id}\"] = {}
 
 with open(vars['config_file'], 'w') as f:
     json.dump(config, f, indent=2)
@@ -1324,23 +1353,23 @@ config_tuzi() {
     local active_group=$(get_env_value "TUZI_GROUP")
     local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
     local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
-    local claude_fallback=$(get_env_value "TUZI_CLAUDE_CODE_FALLBACK_MODEL")
+    local claude_models=$(get_env_value "TUZI_CLAUDE_CODE_MODELS")
     local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
     local codex_model=$(get_env_value "TUZI_CODEX_MODEL")
-    local codex_fallback=$(get_env_value "TUZI_CODEX_FALLBACK_MODEL")
+    local codex_models=$(get_env_value "TUZI_CODEX_MODELS")
 
     echo -e "${CYAN}当前配置:${NC}"
     if [ -n "$claude_key" ]; then
         echo -e "  Claude-Code: ${GREEN}已配置${NC}"
         [ -n "$claude_model" ] && echo -e "    主模型: ${WHITE}$claude_model${NC}"
-        [ -n "$claude_fallback" ] && echo -e "    备用模型: ${WHITE}$claude_fallback${NC}"
+        [ -n "$claude_models" ] && echo -e "    已选模型: ${WHITE}$claude_models${NC}"
     else
         echo -e "  Claude-Code: ${GRAY}(未配置)${NC}"
     fi
     if [ -n "$codex_key" ]; then
         echo -e "  Codex: ${GREEN}已配置${NC}"
         [ -n "$codex_model" ] && echo -e "    主模型: ${WHITE}$codex_model${NC}"
-        [ -n "$codex_fallback" ] && echo -e "    备用模型: ${WHITE}$codex_fallback${NC}"
+        [ -n "$codex_models" ] && echo -e "    已选模型: ${WHITE}$codex_models${NC}"
     else
         echo -e "  Codex: ${GRAY}(未配置)${NC}"
     fi
@@ -1363,15 +1392,15 @@ config_tuzi() {
 
     local current_key=""
     local current_model=""
-    local current_fallback=""
+    local current_models=""
     if [ "$group" = "codex" ]; then
         current_key="$codex_key"
         current_model="$codex_model"
-        current_fallback="$codex_fallback"
+        current_models="$codex_models"
     else
         current_key="$claude_key"
         current_model="$claude_model"
-        current_fallback="$claude_fallback"
+        current_models="$claude_models"
     fi
 
     echo ""
@@ -1393,31 +1422,26 @@ config_tuzi() {
     fi
 
     echo ""
-    if [ -n "$current_model" ]; then
-        echo -e "${GRAY}当前主模型: $current_model${NC}"
+    if [ -n "$current_models" ]; then
+        echo -e "${GRAY}当前已选模型: $current_models${NC}"
     fi
-    choose_tuzi_model "$group" primary_model
+    choose_tuzi_models "$group" selected_models
 
-    if [ -z "$primary_model" ]; then
+    if [ -z "$selected_models" ]; then
         log_error "模型名称不能为空"
         press_enter
         return
     fi
 
-    echo ""
-    if confirm "是否配置备用模型？" "n"; then
-        choose_tuzi_model "$group" fallback_model
-    else
-        fallback_model=""
-    fi
+    local primary_model="${selected_models%%,*}"
 
-    save_tuzi_ai_config "$group" "$api_key" "$primary_model" "$fallback_model"
+    save_tuzi_ai_config "$group" "$api_key" "$primary_model" "$selected_models"
 
     echo ""
     log_info "Tuzi API 配置完成！"
     log_info "分组: $group"
     log_info "主模型: $primary_model"
-    [ -n "$fallback_model" ] && log_info "备用模型: $fallback_model"
+    log_info "已选模型: $selected_models"
 
     echo ""
     if confirm "是否测试 API 连接？" "y"; then
@@ -4628,7 +4652,7 @@ save_tuzi_ai_config() {
     local group="$1"
     local api_key="$2"
     local primary_model="$3"
-    local fallback_model="$4"
+    local selected_models="$4"
 
     ensure_openclaw_init
 
@@ -4644,27 +4668,27 @@ save_tuzi_ai_config() {
 
     local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
     local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
-    local claude_fallback=$(get_env_value "TUZI_CLAUDE_CODE_FALLBACK_MODEL")
+    local claude_models=$(get_env_value "TUZI_CLAUDE_CODE_MODELS")
     local codex_key=$(get_env_value "TUZI_CODEX_API_KEY")
     local codex_model=$(get_env_value "TUZI_CODEX_MODEL")
-    local codex_fallback=$(get_env_value "TUZI_CODEX_FALLBACK_MODEL")
+    local codex_models=$(get_env_value "TUZI_CODEX_MODELS")
 
     if [ "$group" = "codex" ]; then
         codex_key="$api_key"
         codex_model="$primary_model"
-        codex_fallback="$fallback_model"
+        codex_models="$selected_models"
     else
         claude_key="$api_key"
         claude_model="$primary_model"
-        claude_fallback="$fallback_model"
+        claude_models="$selected_models"
     fi
 
-    write_tuzi_env_file "$group" "$provider_id" "$base_url" "$api_type" "$api_key" "$primary_model" "$fallback_model" \
-        "$claude_key" "$claude_model" "$claude_fallback" "$codex_key" "$codex_model" "$codex_fallback"
+    write_tuzi_env_file "$group" "$provider_id" "$base_url" "$api_type" "$api_key" "$primary_model" "$selected_models" \
+        "$claude_key" "$claude_model" "$claude_models" "$codex_key" "$codex_model" "$codex_models"
 
     chmod 600 "$env_file"
 
-    if ! configure_tuzi_provider "$group" "$api_key" "$primary_model" "$fallback_model" "$config_file"; then
+    if ! configure_tuzi_provider "$group" "$api_key" "$primary_model" "$selected_models" "$config_file"; then
         return 1
     fi
 

@@ -29,7 +29,7 @@ llm:
       base_url: "https://api.tu-zi.com"
       api_type: "anthropic-messages"
       model: "claude-sonnet-4-6"
-      fallback_model: "claude-opus-4-6"
+      models: "claude-sonnet-4-6,claude-opus-4-6"
 
     codex:
       provider: tuzi-codex
@@ -38,7 +38,7 @@ llm:
       base_url: "https://api.tu-zi.com/v1"
       api_type: "openai-responses"
       model: "gpt-5.4"
-      fallback_model: "gpt-5.2-high"
+      models: "gpt-5.4,gpt-5.2-high"
 
   # 脚本支持重复添加两个分组
   # 最后一次配置的分组会成为当前默认模型来源

@@ -446,11 +446,58 @@ choose_tuzi_model() {
     printf -v "$result_var" '%s' "$chosen_model"
 }
 
+choose_tuzi_models() {
+    local group="$1"
+    local result_var="$2"
+    local selected_models=()
+    local chosen_model=""
+
+    while true; do
+        choose_tuzi_model "$group" chosen_model
+        if [ -z "$chosen_model" ]; then
+            continue
+        fi
+
+        local already_selected=false
+        local model
+        for model in "${selected_models[@]}"; do
+            if [ "$model" = "$chosen_model" ]; then
+                already_selected=true
+                break
+            fi
+        done
+
+        if [ "$already_selected" = true ]; then
+            log_warn "模型已添加: $chosen_model"
+        else
+            selected_models+=("$chosen_model")
+            log_info "已添加模型: $chosen_model"
+        fi
+
+        if ! confirm "是否继续添加模型？" "n"; then
+            break
+        fi
+        echo ""
+    done
+
+    local joined_models=""
+    local idx
+    for idx in "${!selected_models[@]}"; do
+        if [ -n "$joined_models" ]; then
+            joined_models="${joined_models},${selected_models[$idx]}"
+        else
+            joined_models="${selected_models[$idx]}"
+        fi
+    done
+
+    printf -v "$result_var" '%s' "$joined_models"
+}
+
 configure_tuzi_provider() {
     local group="$1"
     local api_key="$2"
     local primary_model="$3"
-    local fallback_model="$4"
+    local models_csv="$4"
     local config_file="$5"
 
     local settings
@@ -472,7 +519,7 @@ configure_tuzi_provider() {
   "api_key": "$api_key",
   "api_type": "$api_type",
   "primary_model": "$primary_model",
-  "fallback_model": "$fallback_model"
+  "models_csv": "$models_csv"
 }
 EOFVARS
         node -e "
@@ -489,44 +536,36 @@ config.auth.profiles ??= {};
 config.auth.profiles[vars.provider_id + ':default'] = { provider: vars.provider_id, mode: 'api_key' };
 config.models ??= {};
 config.models.providers ??= {};
+const modelIds = (vars.models_csv || vars.primary_model)
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+const providerModels = modelIds.map((modelId) => ({
+  id: modelId,
+  name: modelId,
+  reasoning: false,
+  input: ['text'],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
+}));
 config.models.providers[vars.provider_id] = {
   baseUrl: vars.base_url,
   apiKey: vars.api_key,
   api: vars.api_type,
-  models: [
-    {
-      id: vars.primary_model,
-      name: vars.primary_model,
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
-    }
-  ]
+  models: providerModels
 };
-if (vars.fallback_model) {
-  config.models.providers[vars.provider_id].models.push({
-    id: vars.fallback_model,
-    name: vars.fallback_model,
-    reasoning: false,
-    input: ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: vars.provider_id === 'tuzi-codex' ? 100000 : 8192
-  });
-}
 config.agents ??= {};
 config.agents.defaults ??= {};
+const fallbackModels = modelIds.slice(1).map((modelId) => vars.provider_id + '/' + modelId);
 config.agents.defaults.model = {
   primary: vars.provider_id + '/' + vars.primary_model,
-  fallbacks: vars.fallback_model ? [vars.provider_id + '/' + vars.fallback_model] : []
+  fallbacks: fallbackModels
 };
 config.agents.defaults.models ??= {};
-config.agents.defaults.models[vars.provider_id + '/' + vars.primary_model] = {};
-if (vars.fallback_model) {
-  config.agents.defaults.models[vars.provider_id + '/' + vars.fallback_model] = {};
-}
+modelIds.forEach((modelId) => {
+  config.agents.defaults.models[vars.provider_id + '/' + modelId] = {};
+});
 fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
 " 2>/dev/null
         local node_exit=$?
@@ -546,7 +585,7 @@ fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
   "api_key": "$api_key",
   "api_type": "$api_type",
   "primary_model": "$primary_model",
-  "fallback_model": "$fallback_model"
+  "models_csv": "$models_csv"
 }
 EOFVARS
         python3 -c "
@@ -565,25 +604,16 @@ config.setdefault('auth', {}).setdefault('profiles', {})[vars['provider_id'] + '
     'provider': vars['provider_id'],
     'mode': 'api_key'
 }
+model_ids = [item.strip() for item in (vars.get('models_csv') or vars['primary_model']).split(',') if item.strip()]
 provider_models = [{
-    'id': vars['primary_model'],
-    'name': vars['primary_model'],
+    'id': model_id,
+    'name': model_id,
     'reasoning': False,
     'input': ['text'],
     'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
     'contextWindow': 200000,
     'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
-}]
-if vars['fallback_model']:
-    provider_models.append({
-        'id': vars['fallback_model'],
-        'name': vars['fallback_model'],
-        'reasoning': False,
-        'input': ['text'],
-        'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
-        'contextWindow': 200000,
-        'maxTokens': 100000 if vars['provider_id'] == 'tuzi-codex' else 8192
-    })
+} for model_id in model_ids]
 config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']] = {
     'baseUrl': vars['base_url'],
     'apiKey': vars['api_key'],
@@ -593,11 +623,11 @@ config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']]
 defaults = config.setdefault('agents', {}).setdefault('defaults', {})
 defaults['model'] = {
     'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
-    'fallbacks': [f\"{vars['provider_id']}/{vars['fallback_model']}\"] if vars['fallback_model'] else []
+    'fallbacks': [f\"{vars['provider_id']}/{model_id}\" for model_id in model_ids[1:]]
 }
-defaults.setdefault('models', {})[f\"{vars['provider_id']}/{vars['primary_model']}\"] = {}
-if vars['fallback_model']:
-    defaults['models'][f\"{vars['provider_id']}/{vars['fallback_model']}\"] = {}
+defaults.setdefault('models', {})
+for model_id in model_ids:
+    defaults['models'][f\"{vars['provider_id']}/{model_id}\"] = {}
 with open(vars['config_file'], 'w') as f:
     json.dump(config, f, indent=2)
 " 2>/dev/null
@@ -632,28 +662,28 @@ configure_openclaw_model() {
 
     local claude_key=""
     local claude_model=""
-    local claude_fallback=""
+    local claude_models=""
     local codex_key=""
     local codex_model=""
-    local codex_fallback=""
+    local codex_models=""
     if [ -f "$env_file" ]; then
         source "$env_file"
         claude_key="$TUZI_CLAUDE_CODE_API_KEY"
         claude_model="$TUZI_CLAUDE_CODE_MODEL"
-        claude_fallback="$TUZI_CLAUDE_CODE_FALLBACK_MODEL"
+        claude_models="$TUZI_CLAUDE_CODE_MODELS"
         codex_key="$TUZI_CODEX_API_KEY"
         codex_model="$TUZI_CODEX_MODEL"
-        codex_fallback="$TUZI_CODEX_FALLBACK_MODEL"
+        codex_models="$TUZI_CODEX_MODELS"
     fi
 
     if [ "$TUZI_GROUP" = "codex" ]; then
         codex_key="$AI_KEY"
         codex_model="$AI_MODEL"
-        codex_fallback="$AI_FALLBACK_MODEL"
+        codex_models="$AI_MODELS"
     else
         claude_key="$AI_KEY"
         claude_model="$AI_MODEL"
-        claude_fallback="$AI_FALLBACK_MODEL"
+        claude_models="$AI_MODELS"
     fi
 
     cat > "$env_file" << EOF
@@ -667,8 +697,8 @@ export TUZI_API_TYPE=$api_type
 export TUZI_MODEL=$AI_MODEL
 EOF
 
-    if [ -n "$AI_FALLBACK_MODEL" ]; then
-        echo "export TUZI_FALLBACK_MODEL=$AI_FALLBACK_MODEL" >> "$env_file"
+    if [ -n "$AI_MODELS" ]; then
+        echo "export TUZI_MODELS=$AI_MODELS" >> "$env_file"
     fi
     if [ -n "$claude_key" ]; then
         echo "export TUZI_CLAUDE_CODE_API_KEY=$claude_key" >> "$env_file"
@@ -676,8 +706,8 @@ EOF
     if [ -n "$claude_model" ]; then
         echo "export TUZI_CLAUDE_CODE_MODEL=$claude_model" >> "$env_file"
     fi
-    if [ -n "$claude_fallback" ]; then
-        echo "export TUZI_CLAUDE_CODE_FALLBACK_MODEL=$claude_fallback" >> "$env_file"
+    if [ -n "$claude_models" ]; then
+        echo "export TUZI_CLAUDE_CODE_MODELS=$claude_models" >> "$env_file"
     fi
     if [ -n "$codex_key" ]; then
         echo "export TUZI_CODEX_API_KEY=$codex_key" >> "$env_file"
@@ -685,14 +715,14 @@ EOF
     if [ -n "$codex_model" ]; then
         echo "export TUZI_CODEX_MODEL=$codex_model" >> "$env_file"
     fi
-    if [ -n "$codex_fallback" ]; then
-        echo "export TUZI_CODEX_FALLBACK_MODEL=$codex_fallback" >> "$env_file"
+    if [ -n "$codex_models" ]; then
+        echo "export TUZI_CODEX_MODELS=$codex_models" >> "$env_file"
     fi
     
     chmod 600 "$env_file"
     log_info "环境变量配置已保存到: $env_file"
     
-    configure_tuzi_provider "$TUZI_GROUP" "$AI_KEY" "$AI_MODEL" "$AI_FALLBACK_MODEL" "$openclaw_json"
+    configure_tuzi_provider "$TUZI_GROUP" "$AI_KEY" "$AI_MODEL" "$AI_MODELS" "$openclaw_json"
 
     if check_command openclaw; then
         source "$env_file"
@@ -1128,13 +1158,8 @@ setup_ai_provider() {
     echo ""
     echo -en "${YELLOW}输入 API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
     echo ""
-    choose_tuzi_model "$TUZI_GROUP" AI_MODEL
-    echo ""
-    if confirm "是否配置备用模型？" "n"; then
-        choose_tuzi_model "$TUZI_GROUP" AI_FALLBACK_MODEL
-    else
-        AI_FALLBACK_MODEL=""
-    fi
+    choose_tuzi_models "$TUZI_GROUP" AI_MODELS
+    AI_MODEL="${AI_MODELS%%,*}"
 
     AI_PROVIDER="tuzi"
     BASE_URL=""
@@ -1144,8 +1169,8 @@ setup_ai_provider() {
     log_info "AI Provider 配置完成"
     echo -e "  提供商: ${WHITE}Tuzi API${NC}"
     echo -e "  分组: ${WHITE}$TUZI_GROUP${NC}"
-    echo -e "  模型: ${WHITE}$AI_MODEL${NC}"
-    [ -n "$AI_FALLBACK_MODEL" ] && echo -e "  备用模型: ${WHITE}$AI_FALLBACK_MODEL${NC}"
+    echo -e "  默认模型: ${WHITE}$AI_MODEL${NC}"
+    echo -e "  已选模型: ${WHITE}$AI_MODELS${NC}"
 }
 
 # ================================ API 连接测试 ================================
