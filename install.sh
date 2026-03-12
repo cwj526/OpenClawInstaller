@@ -22,9 +22,11 @@ set -e
 if [ -t 0 ]; then
     # stdin 是终端
     TTY_INPUT="/dev/stdin"
+    RUN_FROM_PIPE="false"
 else
     # stdin 是管道，使用 /dev/tty
     TTY_INPUT="/dev/tty"
+    RUN_FROM_PIPE="true"
 fi
 
 # ================================ 颜色定义 ================================
@@ -78,6 +80,18 @@ log_error() {
 
 log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
+}
+
+download_latest_config_menu() {
+    local target_path="$1"
+    if curl --connect-timeout 10 --max-time 30 -fsSL "$GITHUB_RAW_URL/config-menu.sh" -o "$target_path.tmp"; then
+        mv "$target_path.tmp" "$target_path"
+        chmod +x "$target_path"
+        return 0
+    fi
+
+    rm -f "$target_path.tmp" 2>/dev/null
+    return 1
 }
 
 spinner() {
@@ -1601,16 +1615,22 @@ run_config_menu() {
     if [ "$has_local_menu" = true ]; then
         log_info "检测到本地配置菜单: $menu_script"
         echo ""
-        if confirm "是否从 GitHub 更新到最新版本？" "n"; then
-            log_step "从 GitHub 下载最新配置菜单..."
-            if curl -fsSL "$GITHUB_RAW_URL/config-menu.sh" -o "$config_menu_path.tmp"; then
-                mv "$config_menu_path.tmp" "$config_menu_path"
-                chmod +x "$config_menu_path"
+
+        if [ "$RUN_FROM_PIPE" = "true" ]; then
+            log_step "检测到通过 curl | bash 运行，自动下载最新配置菜单..."
+            if download_latest_config_menu "$config_menu_path"; then
                 log_info "配置菜单已更新: $config_menu_path"
                 menu_script="$config_menu_path"
             else
-                rm -f "$config_menu_path.tmp" 2>/dev/null
-                log_warn "下载失败，继续使用本地版本"
+                log_warn "下载失败或超时，继续使用本地版本"
+            fi
+        elif confirm "是否从 GitHub 更新到最新版本？" "n"; then
+            log_step "从 GitHub 下载最新配置菜单..."
+            if download_latest_config_menu "$config_menu_path"; then
+                log_info "配置菜单已更新: $config_menu_path"
+                menu_script="$config_menu_path"
+            else
+                log_warn "下载失败或超时，继续使用本地版本"
             fi
         else
             log_info "使用本地配置菜单"
@@ -1618,14 +1638,11 @@ run_config_menu() {
     else
         # 本地没有配置菜单，从 GitHub 下载
         log_step "从 GitHub 下载配置菜单..."
-        if curl -fsSL "$GITHUB_RAW_URL/config-menu.sh" -o "$config_menu_path.tmp"; then
-            mv "$config_menu_path.tmp" "$config_menu_path"
-            chmod +x "$config_menu_path"
+        if download_latest_config_menu "$config_menu_path"; then
             log_info "配置菜单已下载: $config_menu_path"
             menu_script="$config_menu_path"
         else
-            rm -f "$config_menu_path.tmp" 2>/dev/null
-            log_error "配置菜单下载失败"
+            log_error "配置菜单下载失败或超时"
             echo -e "${YELLOW}你可以稍后手动下载运行:${NC}"
             echo "  curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o config-menu.sh && bash config-menu.sh"
             return 1
