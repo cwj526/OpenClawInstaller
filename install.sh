@@ -5,13 +5,13 @@
 # ║   🦞 OpenClaw 一键部署脚本 v1.0.0                                          ║
 # ║   智能 AI 助手部署工具 - 支持多平台多模型                                    ║
 # ║                                                                           ║
-# ║   GitHub: https://github.com/miaoxworld/OpenClawInstaller                 ║
+# ║   GitHub: https://github.com/cwj526/OpenClawInstaller                     ║
 # ║   官方文档: https://clawd.bot/docs                                         ║
 # ║                                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 #
 # 使用方法:
-#   curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/install.sh | bash
 #   或本地执行: chmod +x install.sh && ./install.sh
 #
 
@@ -42,7 +42,7 @@ NC='\033[0m' # 无颜色
 OPENCLAW_VERSION="latest"
 CONFIG_DIR="$HOME/.openclaw"
 MIN_NODE_VERSION=22
-GITHUB_REPO="miaoxworld/OpenClawInstaller"
+GITHUB_REPO="cwj526/OpenClawInstaller"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main"
 
 # ================================ 工具函数 ================================
