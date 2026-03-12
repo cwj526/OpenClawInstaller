@@ -233,6 +233,40 @@ get_env_value() {
     fi
 }
 
+read_valid_number_choice() {
+    local prompt="$1"
+    local min_value="$2"
+    local max_value="$3"
+    local default_value="$4"
+    local result_var="$5"
+    local choice=""
+
+    while true; do
+        read -p "$(echo -e "$prompt")" choice < "$TTY_INPUT"
+        choice=${choice:-$default_value}
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge "$min_value" ] && [ "$choice" -le "$max_value" ]; then
+            printf -v "$result_var" '%s' "$choice"
+            return 0
+        fi
+        log_error "输入无效，请输入 $min_value-$max_value 之间的数字"
+    done
+}
+
+read_nonempty_value() {
+    local prompt="$1"
+    local result_var="$2"
+    local value=""
+
+    while true; do
+        read -p "$(echo -e "$prompt")" value < "$TTY_INPUT"
+        if [ -n "$value" ]; then
+            printf -v "$result_var" '%s' "$value"
+            return 0
+        fi
+        log_error "输入不能为空，请重新输入"
+    done
+}
+
 get_openclaw_primary_model() {
     if [ ! -f "$OPENCLAW_JSON" ]; then
         return 0
@@ -351,11 +385,10 @@ choose_tuzi_model() {
     echo ""
 
     if [ "$allow_finish" = "true" ]; then
-        read -p "$(echo -e "${YELLOW}请选择 [0-$i] (默认: 1): ${NC}")" model_choice < "$TTY_INPUT"
+        read_valid_number_choice "${YELLOW}请选择 [0-$i] (默认: 1): ${NC}" 0 "$i" 1 model_choice
     else
-        read -p "$(echo -e "${YELLOW}请选择 [1-$i] (默认: 1): ${NC}")" model_choice < "$TTY_INPUT"
+        read_valid_number_choice "${YELLOW}请选择 [1-$i] (默认: 1): ${NC}" 1 "$i" 1 model_choice
     fi
-    model_choice=${model_choice:-1}
 
     local selected_value=""
     if [ "$allow_finish" = "true" ] && [ "$model_choice" = "0" ]; then
@@ -363,7 +396,7 @@ choose_tuzi_model() {
     elif [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
         selected_value="${models[$((model_choice - 1))]}"
     else
-        read -p "$(echo -e "${YELLOW}输入模型名称: ${NC}")" selected_value < "$TTY_INPUT"
+        read_nonempty_value "${YELLOW}输入模型名称: ${NC}" selected_value
     fi
 
     printf -v "$result_var" '%s' "$selected_value"
@@ -1394,7 +1427,7 @@ config_tuzi() {
     print_menu_item "1" "Claude-Code" "🟣"
     print_menu_item "2" "Codex" "🟢"
     echo ""
-    read -p "$(echo -e "${YELLOW}请选择 [1-2] (默认: 1): ${NC}")" group_choice < "$TTY_INPUT"
+    read_valid_number_choice "${YELLOW}请选择 [1-2] (默认: 1): ${NC}" 1 2 1 group_choice
 
     local group="claude-code"
     case "$group_choice" in
@@ -5270,7 +5303,7 @@ quick_test_ai() {
             print_menu_item "1" "Claude-Code" "🟣"
             print_menu_item "2" "Codex" "🟢"
             echo ""
-            read -p "$(echo -e "${YELLOW}请选择 [1-2] (默认: 1): ${NC}")" group_choice < "$TTY_INPUT"
+            read_valid_number_choice "${YELLOW}请选择 [1-2] (默认: 1): ${NC}" 1 2 1 group_choice
             case "$group_choice" in
                 2) group="codex" ;;
                 *) group="claude-code" ;;
