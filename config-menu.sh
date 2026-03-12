@@ -357,49 +357,49 @@ choose_tuzi_model() {
     fi
     model_choice=${model_choice:-1}
 
-    local chosen_model=""
+    local selected_value=""
     if [ "$allow_finish" = "true" ] && [ "$model_choice" = "0" ]; then
-        chosen_model="__DONE__"
+        selected_value="__DONE__"
     elif [ "$model_choice" -ge 1 ] 2>/dev/null && [ "$model_choice" -lt "$i" ] 2>/dev/null; then
-        chosen_model="${models[$((model_choice - 1))]}"
+        selected_value="${models[$((model_choice - 1))]}"
     else
-        read -p "$(echo -e "${YELLOW}输入模型名称: ${NC}")" chosen_model < "$TTY_INPUT"
+        read -p "$(echo -e "${YELLOW}输入模型名称: ${NC}")" selected_value < "$TTY_INPUT"
     fi
 
-    printf -v "$result_var" '%s' "$chosen_model"
+    printf -v "$result_var" '%s' "$selected_value"
 }
 
 choose_tuzi_models() {
     local group="$1"
     local result_var="$2"
-    local selected_models=()
-    local chosen_model=""
+    local collected_models=()
+    local picked_model=""
 
     while true; do
         local allow_finish="false"
-        [ ${#selected_models[@]} -gt 0 ] && allow_finish="true"
-        choose_tuzi_model "$group" chosen_model "$allow_finish"
-        if [ "$chosen_model" = "__DONE__" ]; then
+        [ ${#collected_models[@]} -gt 0 ] && allow_finish="true"
+        choose_tuzi_model "$group" picked_model "$allow_finish"
+        if [ "$picked_model" = "__DONE__" ]; then
             break
         fi
-        if [ -z "$chosen_model" ]; then
+        if [ -z "$picked_model" ]; then
             continue
         fi
 
         local already_selected=false
         local model
-        for model in "${selected_models[@]}"; do
-            if [ "$model" = "$chosen_model" ]; then
+        for model in "${collected_models[@]}"; do
+            if [ "$model" = "$picked_model" ]; then
                 already_selected=true
                 break
             fi
         done
 
         if [ "$already_selected" = true ]; then
-            log_warn "模型已添加: $chosen_model"
+            log_warn "模型已添加: $picked_model"
         else
-            selected_models+=("$chosen_model")
-            log_info "已添加模型: $chosen_model"
+            collected_models+=("$picked_model")
+            log_info "已添加模型: $picked_model"
         fi
 
         echo ""
@@ -407,11 +407,11 @@ choose_tuzi_models() {
 
     local joined_models=""
     local idx
-    for idx in "${!selected_models[@]}"; do
+    for idx in "${!collected_models[@]}"; do
         if [ -n "$joined_models" ]; then
-            joined_models="${joined_models},${selected_models[$idx]}"
+            joined_models="${joined_models},${collected_models[$idx]}"
         else
-            joined_models="${selected_models[$idx]}"
+            joined_models="${collected_models[$idx]}"
         fi
     done
 
