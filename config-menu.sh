@@ -165,28 +165,27 @@ printf "%s" "$value"
 ' _ "$env_value" 2>/dev/null
 }
 
-get_tuzi_default_group() {
-    local env_file="${1:-$OPENCLAW_ENV}"
-    local default_group=""
-
-    default_group=$(get_env_file_value "$env_file" "TUZI_DEFAULT_GROUP")
-    if [ -z "$default_group" ]; then
-        default_group=$(get_env_file_value "$env_file" "TUZI_GROUP")
-    fi
-
-    printf '%s' "$default_group"
+get_tuzi_group_from_model_ref() {
+    local model_ref="$1"
+    case "$model_ref" in
+        tuzi-codex/*) printf '%s' "codex" ;;
+        tuzi-claude-code/*) printf '%s' "claude-code" ;;
+        *) printf '%s' "" ;;
+    esac
 }
 
-get_tuzi_default_model() {
-    local env_file="${1:-$OPENCLAW_ENV}"
-    local default_model=""
+get_tuzi_model_name_from_ref() {
+    local model_ref="$1"
+    case "$model_ref" in
+        */*) printf '%s' "${model_ref#*/}" ;;
+        *) printf '%s' "$model_ref" ;;
+    esac
+}
 
-    default_model=$(get_env_file_value "$env_file" "TUZI_DEFAULT_MODEL")
-    if [ -z "$default_model" ]; then
-        default_model=$(get_env_file_value "$env_file" "TUZI_MODEL")
-    fi
-
-    printf '%s' "$default_model"
+get_current_tuzi_group() {
+    local primary_model=""
+    primary_model=$(get_openclaw_primary_model)
+    get_tuzi_group_from_model_ref "$primary_model"
 }
 
 press_enter() {
@@ -585,31 +584,15 @@ choose_tuzi_models() {
 }
 
 write_tuzi_env_file() {
-    local default_group="$1"
-    local default_provider_id="$2"
-    local default_base_url="$3"
-    local default_api_type="$4"
-    local default_model="$5"
-    local default_models="$6"
-
     local env_file="$OPENCLAW_ENV"
-    local claude_key="$7"
-    local claude_model="$8"
-    local claude_models="$9"
-    local codex_key="${10}"
-    local codex_model="${11}"
-    local codex_models="${12}"
+    local claude_key="$1"
+    local claude_model="$2"
+    local claude_models="$3"
+    local codex_key="$4"
+    local codex_model="$5"
+    local codex_models="$6"
 
     write_env_header "$env_file" "配置菜单"
-    append_env_kv "$env_file" "TUZI_DEFAULT_GROUP" "$default_group"
-    append_env_kv "$env_file" "TUZI_DEFAULT_PROVIDER_ID" "$default_provider_id"
-    append_env_kv "$env_file" "TUZI_DEFAULT_BASE_URL" "$default_base_url"
-    append_env_kv "$env_file" "TUZI_DEFAULT_API_TYPE" "$default_api_type"
-    append_env_kv "$env_file" "TUZI_DEFAULT_MODEL" "$default_model"
-
-    if [ -n "$default_models" ]; then
-        append_env_kv "$env_file" "TUZI_DEFAULT_MODELS" "$default_models"
-    fi
     if [ -n "$claude_key" ]; then
         append_env_kv "$env_file" "TUZI_CLAUDE_CODE_API_KEY" "$claude_key"
     fi
@@ -1484,9 +1467,13 @@ show_status() {
         
         # 检查 API Key 配置
         if is_tuzi_group_complete "claude-code" || is_tuzi_group_complete "codex"; then
-            local tuzi_group=$(get_tuzi_default_group)
+            local tuzi_group=$(get_current_tuzi_group)
             echo -e "    • AI 提供商: ${WHITE}Tuzi API${NC}"
-            [ -n "$tuzi_group" ] && echo -e "    • 默认分组: ${WHITE}$tuzi_group${NC}"
+            if [ -n "$tuzi_group" ]; then
+                echo -e "    • 当前 Tuzi Provider: ${WHITE}$tuzi_group${NC}"
+            else
+                echo -e "    • 当前默认模型未使用 Tuzi${NC}"
+            fi
         elif grep -q "ANTHROPIC_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
             echo -e "    • AI 提供商: ${WHITE}Anthropic${NC}"
         elif grep -q "OPENAI_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
@@ -1529,7 +1516,8 @@ config_tuzi() {
     echo -e "${GRAY}获取 Key: https://api.tu-zi.com/token${NC}"
     echo ""
 
-    local active_group=$(get_tuzi_default_group)
+    local active_group=$(get_current_tuzi_group)
+    local active_model_ref=$(get_openclaw_primary_model)
     local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
     local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
     local claude_models=$(get_env_value "TUZI_CLAUDE_CODE_MODELS")
@@ -1557,7 +1545,10 @@ config_tuzi() {
         echo -e "  Codex: ${GRAY}(未配置)${NC}"
     fi
     if [ -n "$active_group" ]; then
-        echo -e "  默认 Provider: ${WHITE}$active_group${NC}"
+        echo -e "  当前 Tuzi Provider: ${WHITE}$active_group${NC}"
+        echo -e "  当前 Tuzi 模型: ${WHITE}$(get_tuzi_model_name_from_ref "$active_model_ref")${NC}"
+    elif [ -n "$active_model_ref" ]; then
+        echo -e "  当前默认模型不属于 Tuzi: ${WHITE}$active_model_ref${NC}"
     fi
     echo ""
 
@@ -4838,25 +4829,9 @@ save_tuzi_ai_config() {
 
     local env_file="$OPENCLAW_ENV"
     local config_file="$OPENCLAW_JSON"
-    local existing_default_group=$(get_tuzi_default_group)
-    local existing_default_provider_id=$(get_env_value "TUZI_DEFAULT_PROVIDER_ID")
-    local existing_default_base_url=$(get_env_value "TUZI_DEFAULT_BASE_URL")
-    local existing_default_api_type=$(get_env_value "TUZI_DEFAULT_API_TYPE")
-    local existing_default_model=$(get_tuzi_default_model)
-    local existing_default_models=$(get_env_value "TUZI_DEFAULT_MODELS")
+    local existing_primary_model=$(get_openclaw_primary_model)
+    local existing_tuzi_group=$(get_tuzi_group_from_model_ref "$existing_primary_model")
     local should_update_default="false"
-    if [ -z "$existing_default_provider_id" ]; then
-        existing_default_provider_id=$(get_env_value "TUZI_PROVIDER_ID")
-    fi
-    if [ -z "$existing_default_base_url" ]; then
-        existing_default_base_url=$(get_env_value "TUZI_BASE_URL")
-    fi
-    if [ -z "$existing_default_api_type" ]; then
-        existing_default_api_type=$(get_env_value "TUZI_API_TYPE")
-    fi
-    if [ -z "$existing_default_models" ]; then
-        existing_default_models=$(get_env_value "TUZI_MODELS")
-    fi
     local settings
     settings=$(get_tuzi_group_settings "$group")
     local provider_id="${settings%%|*}"
@@ -4882,21 +4857,15 @@ save_tuzi_ai_config() {
         claude_models="$selected_models"
     fi
 
-    if [ -z "$existing_default_group" ] || [ "$existing_default_group" = "$group" ]; then
+    if [ -z "$existing_primary_model" ] || [ "$existing_tuzi_group" = "$group" ]; then
         should_update_default="true"
+    elif [ -n "$existing_primary_model" ]; then
+        if confirm "当前默认模型是 $existing_primary_model，是否切换为 $provider_id/$primary_model？" "n"; then
+            should_update_default="true"
+        fi
     fi
 
-    if [ "$should_update_default" = "true" ]; then
-        existing_default_group="$group"
-        existing_default_provider_id="$provider_id"
-        existing_default_base_url="$base_url"
-        existing_default_api_type="$api_type"
-        existing_default_model="$primary_model"
-        existing_default_models="$selected_models"
-    fi
-
-    write_tuzi_env_file "$existing_default_group" "$existing_default_provider_id" "$existing_default_base_url" "$existing_default_api_type" "$existing_default_model" "$existing_default_models" \
-        "$claude_key" "$claude_model" "$claude_models" "$codex_key" "$codex_model" "$codex_models"
+    write_tuzi_env_file "$claude_key" "$claude_model" "$claude_models" "$codex_key" "$codex_model" "$codex_models"
 
     chmod 600 "$env_file"
 
@@ -5881,7 +5850,7 @@ run_all_tests() {
         
         case "$provider" in
             tuzi)
-                if [ "$(get_tuzi_default_group)" = "codex" ]; then
+                if [ "$(get_current_tuzi_group)" = "codex" ]; then
                     test_url="${base_url:-https://api.tu-zi.com/v1}/responses"
                     http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$test_url" \
                         -H "Authorization: Bearer $api_key" -H "Content-Type: application/json" \

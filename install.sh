@@ -145,28 +145,59 @@ printf "%s" "$value"
 ' _ "$env_value" 2>/dev/null
 }
 
-get_tuzi_default_group() {
-    local env_file="${1:-$HOME/.openclaw/env}"
-    local default_group=""
-
-    default_group=$(get_env_file_value "$env_file" "TUZI_DEFAULT_GROUP")
-    if [ -z "$default_group" ]; then
-        default_group=$(get_env_file_value "$env_file" "TUZI_GROUP")
+get_openclaw_primary_model_file() {
+    local config_file="${1:-$HOME/.openclaw/openclaw.json}"
+    if [ ! -f "$config_file" ]; then
+        return 0
     fi
 
-    printf '%s' "$default_group"
+    if command -v node &> /dev/null; then
+        node -e "
+try {
+  const config = JSON.parse(require('fs').readFileSync('$config_file', 'utf8'));
+  console.log(config?.agents?.defaults?.model?.primary || '');
+} catch (e) {
+  console.log('');
+}
+" 2>/dev/null
+        return 0
+    fi
+
+    if command -v python3 &> /dev/null; then
+        python3 -c "
+import json
+try:
+    with open('$config_file', 'r') as f:
+        config = json.load(f)
+    print(config.get('agents', {}).get('defaults', {}).get('model', {}).get('primary', ''))
+except Exception:
+    print('')
+" 2>/dev/null
+    fi
 }
 
-get_tuzi_default_model() {
-    local env_file="${1:-$HOME/.openclaw/env}"
-    local default_model=""
+get_tuzi_group_from_model_ref() {
+    local model_ref="$1"
+    case "$model_ref" in
+        tuzi-codex/*) printf '%s' "codex" ;;
+        tuzi-claude-code/*) printf '%s' "claude-code" ;;
+        *) printf '%s' "" ;;
+    esac
+}
 
-    default_model=$(get_env_file_value "$env_file" "TUZI_DEFAULT_MODEL")
-    if [ -z "$default_model" ]; then
-        default_model=$(get_env_file_value "$env_file" "TUZI_MODEL")
-    fi
+get_tuzi_model_name_from_ref() {
+    local model_ref="$1"
+    case "$model_ref" in
+        */*) printf '%s' "${model_ref#*/}" ;;
+        *) printf '%s' "$model_ref" ;;
+    esac
+}
 
-    printf '%s' "$default_model"
+get_current_tuzi_group() {
+    local config_file="${1:-$HOME/.openclaw/openclaw.json}"
+    local primary_model=""
+    primary_model=$(get_openclaw_primary_model_file "$config_file")
+    get_tuzi_group_from_model_ref "$primary_model"
 }
 
 download_latest_config_menu() {
@@ -453,14 +484,14 @@ is_tuzi_configured() {
 
 show_current_tuzi_config() {
     local env_file="$HOME/.openclaw/env"
+    local openclaw_json="$HOME/.openclaw/openclaw.json"
 
     if [ ! -f "$env_file" ]; then
         return 0
     fi
 
-    local default_group
-    local default_model
-    local default_models
+    local current_group
+    local current_model_ref
     local claude_key
     local claude_model
     local claude_models
@@ -468,12 +499,8 @@ show_current_tuzi_config() {
     local codex_model
     local codex_models
 
-    default_group=$(get_tuzi_default_group "$env_file")
-    default_model=$(get_tuzi_default_model "$env_file")
-    default_models=$(get_env_file_value "$env_file" "TUZI_DEFAULT_MODELS")
-    if [ -z "$default_models" ]; then
-        default_models=$(get_env_file_value "$env_file" "TUZI_MODELS")
-    fi
+    current_model_ref=$(get_openclaw_primary_model_file "$openclaw_json")
+    current_group=$(get_tuzi_group_from_model_ref "$current_model_ref")
     claude_key=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_API_KEY")
     claude_model=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_MODEL")
     claude_models=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_MODELS")
@@ -482,14 +509,11 @@ show_current_tuzi_config() {
     codex_models=$(get_env_file_value "$env_file" "TUZI_CODEX_MODELS")
 
     echo -e "${CYAN}当前 Tuzi 配置:${NC}"
-    if [ -n "$default_group" ]; then
-        echo -e "  默认 Provider: ${WHITE}$default_group${NC}"
-    fi
-    if [ -n "$default_model" ]; then
-        echo -e "  默认模型: ${WHITE}$default_model${NC}"
-    fi
-    if [ -n "$default_models" ]; then
-        echo -e "  默认模型列表: ${WHITE}$default_models${NC}"
+    if [ -n "$current_group" ]; then
+        echo -e "  当前 Tuzi Provider: ${WHITE}$current_group${NC}"
+        echo -e "  当前 Tuzi 模型: ${WHITE}$(get_tuzi_model_name_from_ref "$current_model_ref")${NC}"
+    elif [ -n "$current_model_ref" ]; then
+        echo -e "  当前默认模型不属于 Tuzi: ${WHITE}$current_model_ref${NC}"
     fi
     if [ -n "$claude_key" ] && [ -n "$claude_model" ]; then
         echo -e "  Claude-Code: ${GREEN}已配置${NC}"
@@ -1028,12 +1052,8 @@ configure_openclaw_model() {
     
     local env_file="$HOME/.openclaw/env"
     local openclaw_json="$HOME/.openclaw/openclaw.json"
-    local existing_default_group
-    local existing_default_provider_id
-    local existing_default_base_url
-    local existing_default_api_type
-    local existing_default_model
-    local existing_default_models
+    local existing_primary_model
+    local existing_tuzi_group
     local should_update_default="false"
 
     local settings
@@ -1051,24 +1071,6 @@ configure_openclaw_model() {
     local codex_model=""
     local codex_models=""
     if [ -f "$env_file" ]; then
-        existing_default_group=$(get_tuzi_default_group "$env_file")
-        existing_default_provider_id=$(get_env_file_value "$env_file" "TUZI_DEFAULT_PROVIDER_ID")
-        existing_default_base_url=$(get_env_file_value "$env_file" "TUZI_DEFAULT_BASE_URL")
-        existing_default_api_type=$(get_env_file_value "$env_file" "TUZI_DEFAULT_API_TYPE")
-        existing_default_model=$(get_tuzi_default_model "$env_file")
-        existing_default_models=$(get_env_file_value "$env_file" "TUZI_DEFAULT_MODELS")
-        if [ -z "$existing_default_provider_id" ]; then
-            existing_default_provider_id=$(get_env_file_value "$env_file" "TUZI_PROVIDER_ID")
-        fi
-        if [ -z "$existing_default_base_url" ]; then
-            existing_default_base_url=$(get_env_file_value "$env_file" "TUZI_BASE_URL")
-        fi
-        if [ -z "$existing_default_api_type" ]; then
-            existing_default_api_type=$(get_env_file_value "$env_file" "TUZI_API_TYPE")
-        fi
-        if [ -z "$existing_default_models" ]; then
-            existing_default_models=$(get_env_file_value "$env_file" "TUZI_MODELS")
-        fi
         claude_key=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_API_KEY")
         claude_model=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_MODEL")
         claude_models=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_MODELS")
@@ -1087,28 +1089,18 @@ configure_openclaw_model() {
         claude_models="$AI_MODELS"
     fi
 
-    if [ -z "$existing_default_group" ] || [ "$existing_default_group" = "$TUZI_GROUP" ]; then
+    existing_primary_model=$(get_openclaw_primary_model_file "$openclaw_json")
+    existing_tuzi_group=$(get_tuzi_group_from_model_ref "$existing_primary_model")
+    if [ -z "$existing_primary_model" ] || [ "$existing_tuzi_group" = "$TUZI_GROUP" ]; then
         should_update_default="true"
+    elif [ -n "$existing_primary_model" ]; then
+        local requested_model="$provider_id/$AI_MODEL"
+        if confirm "当前默认模型是 $existing_primary_model，是否切换为 $requested_model？" "n"; then
+            should_update_default="true"
+        fi
     fi
 
     write_env_header "$env_file" "安装脚本"
-    if [ "$should_update_default" = "true" ]; then
-        append_env_kv "$env_file" "TUZI_DEFAULT_GROUP" "$TUZI_GROUP"
-        append_env_kv "$env_file" "TUZI_DEFAULT_PROVIDER_ID" "$provider_id"
-        append_env_kv "$env_file" "TUZI_DEFAULT_BASE_URL" "$base_url"
-        append_env_kv "$env_file" "TUZI_DEFAULT_API_TYPE" "$api_type"
-        append_env_kv "$env_file" "TUZI_DEFAULT_MODEL" "$AI_MODEL"
-        if [ -n "$AI_MODELS" ]; then
-            append_env_kv "$env_file" "TUZI_DEFAULT_MODELS" "$AI_MODELS"
-        fi
-    else
-        [ -n "$existing_default_group" ] && append_env_kv "$env_file" "TUZI_DEFAULT_GROUP" "$existing_default_group"
-        [ -n "$existing_default_provider_id" ] && append_env_kv "$env_file" "TUZI_DEFAULT_PROVIDER_ID" "$existing_default_provider_id"
-        [ -n "$existing_default_base_url" ] && append_env_kv "$env_file" "TUZI_DEFAULT_BASE_URL" "$existing_default_base_url"
-        [ -n "$existing_default_api_type" ] && append_env_kv "$env_file" "TUZI_DEFAULT_API_TYPE" "$existing_default_api_type"
-        [ -n "$existing_default_model" ] && append_env_kv "$env_file" "TUZI_DEFAULT_MODEL" "$existing_default_model"
-        [ -n "$existing_default_models" ] && append_env_kv "$env_file" "TUZI_DEFAULT_MODELS" "$existing_default_models"
-    fi
     if [ -n "$claude_key" ]; then
         append_env_kv "$env_file" "TUZI_CLAUDE_CODE_API_KEY" "$claude_key"
     fi
@@ -1497,11 +1489,11 @@ run_onboard_wizard() {
                 local openai_base_url
                 local google_api_key
 
-                tuzi_group=$(get_tuzi_default_group "$env_file")
+                tuzi_group=$(get_current_tuzi_group "$HOME/.openclaw/openclaw.json")
                 if [ "$tuzi_group" = "codex" ]; then
                     tuzi_api_key=$(get_env_file_value "$env_file" "TUZI_CODEX_API_KEY")
                     tuzi_base_url="https://api.tu-zi.com/v1"
-                else
+                elif [ "$tuzi_group" = "claude-code" ]; then
                     tuzi_api_key=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_API_KEY")
                     tuzi_base_url="https://api.tu-zi.com"
                 fi
