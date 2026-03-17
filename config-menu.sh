@@ -182,6 +182,21 @@ get_tuzi_model_name_from_ref() {
     esac
 }
 
+sanitize_model_display() {
+    local value="$1"
+    local sanitized=""
+
+    sanitized=$(printf '%s' "$value" \
+        | LC_ALL=C tr -cd '[:alnum:]._:/ -' 2>/dev/null \
+        | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+
+    if [ -n "$sanitized" ]; then
+        printf '%s' "$sanitized"
+    else
+        printf '%s' "(无法识别的模型名)"
+    fi
+}
+
 get_current_tuzi_group() {
     local primary_model=""
     primary_model=$(get_openclaw_primary_model)
@@ -4860,7 +4875,11 @@ save_tuzi_ai_config() {
     if [ -z "$existing_primary_model" ] || [ "$existing_tuzi_group" = "$group" ]; then
         should_update_default="true"
     elif [ -n "$existing_primary_model" ]; then
-        if confirm "当前默认模型是 $existing_primary_model，是否切换为 $provider_id/$primary_model？" "n"; then
+        local display_existing_model
+        local display_requested_model
+        display_existing_model=$(sanitize_model_display "$existing_primary_model")
+        display_requested_model=$(sanitize_model_display "$provider_id/$primary_model")
+        if confirm "当前默认模型是 ${display_existing_model}, 是否切换为 ${display_requested_model}?" "n"; then
             should_update_default="true"
         fi
     fi
