@@ -43,6 +43,7 @@ NC='\033[0m' # 无颜色
 # ================================ 配置变量 ================================
 OPENCLAW_VERSION="latest"
 CONFIG_DIR="$HOME/.openclaw"
+CONFIG_MENU_PATH="$CONFIG_DIR/config-menu.sh"
 MIN_NODE_VERSION=22
 GITHUB_REPO="cwj526/OpenClawInstaller"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main"
@@ -257,6 +258,7 @@ get_current_tuzi_group() {
 
 download_latest_config_menu() {
     local target_path="$1"
+    mkdir -p "$(dirname "$target_path")"
     if curl --connect-timeout 10 --max-time 30 -fsSL "$GITHUB_RAW_URL/config-menu.sh" -o "$target_path.tmp"; then
         mv "$target_path.tmp" "$target_path"
         chmod +x "$target_path"
@@ -265,6 +267,32 @@ download_latest_config_menu() {
 
     rm -f "$target_path.tmp" 2>/dev/null
     return 1
+}
+
+install_local_config_menu() {
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local local_config_menu="$script_dir/config-menu.sh"
+
+    if [ ! -f "$local_config_menu" ]; then
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$CONFIG_MENU_PATH")"
+    cp "$local_config_menu" "$CONFIG_MENU_PATH"
+    chmod +x "$CONFIG_MENU_PATH"
+}
+
+ensure_config_menu_available() {
+    if [ -f "$CONFIG_MENU_PATH" ]; then
+        chmod +x "$CONFIG_MENU_PATH" 2>/dev/null || true
+        return 0
+    fi
+
+    if install_local_config_menu; then
+        return 0
+    fi
+
+    download_latest_config_menu "$CONFIG_MENU_PATH"
 }
 
 spinner() {
@@ -2009,7 +2037,7 @@ start_openclaw_service() {
 
 # 下载并运行配置菜单
 run_config_menu() {
-    local config_menu_path="./config-menu.sh"
+    local config_menu_path="$CONFIG_MENU_PATH"
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local local_config_menu="$script_dir/config-menu.sh"
     local menu_script=""
@@ -2063,7 +2091,7 @@ run_config_menu() {
         else
             log_error "配置菜单下载失败或超时"
             echo -e "${YELLOW}你可以稍后手动下载运行:${NC}"
-            echo "  curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o config-menu.sh && bash config-menu.sh"
+            echo "  curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o $CONFIG_MENU_PATH && bash $CONFIG_MENU_PATH"
             return 1
         fi
     fi
@@ -2138,7 +2166,7 @@ run_tuzi_only_setup() {
     echo -e "${CYAN}后续可用命令:${NC}"
     echo "  openclaw models status"
     echo "  source ~/.openclaw/env && openclaw gateway"
-    echo "  bash ./config-menu.sh"
+    echo "  bash ~/.openclaw/config-menu.sh"
     echo ""
 
     if confirm "是否现在启动或重启 OpenClaw 服务？" "y"; then
@@ -2147,8 +2175,8 @@ run_tuzi_only_setup() {
 
     echo ""
     echo -e "${WHITE}如需继续配置消息渠道，可运行:${NC}"
-    echo "  bash ./config-menu.sh"
-    echo "  或 curl -fsSL $GITHUB_RAW_URL/config-menu.sh | bash"
+    echo "  bash ~/.openclaw/config-menu.sh"
+    echo "  或 curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o ~/.openclaw/config-menu.sh && bash ~/.openclaw/config-menu.sh"
     echo ""
 }
 
@@ -2224,15 +2252,27 @@ main() {
     echo ""
     echo -e "${GRAY}配置菜单支持: 渠道配置、身份设置、安全配置、服务管理等${NC}"
     echo ""
-    echo -e "${WHITE}💡 下次可以直接运行配置菜单:${NC}"
-    echo -e "   ${CYAN}bash ./config-menu.sh${NC}"
+    local config_menu_ready=false
+    if ensure_config_menu_available; then
+        config_menu_ready=true
+        echo -e "${WHITE}💡 下次可以直接运行配置菜单:${NC}"
+        echo -e "   ${CYAN}bash ~/.openclaw/config-menu.sh${NC}"
+    else
+        echo -e "${YELLOW}配置菜单未能自动保存到本地。${NC}"
+        echo -e "${WHITE}稍后可以通过以下命令下载并运行:${NC}"
+        echo -e "   ${CYAN}curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o ~/.openclaw/config-menu.sh && bash ~/.openclaw/config-menu.sh${NC}"
+    fi
     echo ""
     if confirm "是否现在打开配置菜单？" "n"; then
         run_config_menu
     else
         echo ""
         echo -e "${CYAN}稍后可以通过以下命令打开配置菜单:${NC}"
-        echo "  bash ./config-menu.sh"
+        if [ "$config_menu_ready" = true ]; then
+            echo "  bash ~/.openclaw/config-menu.sh"
+        else
+            echo "  curl -fsSL $GITHUB_RAW_URL/config-menu.sh -o ~/.openclaw/config-menu.sh && bash ~/.openclaw/config-menu.sh"
+        fi
         echo ""
     fi
     
