@@ -125,8 +125,8 @@ openclaw gateway start
 # 运行配置菜单进行详细配置
 bash ~/.openclaw/config-menu.sh
 
-# 或从 GitHub 下载运行
-curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/config-menu.sh | bash
+# 如果本地没有配置菜单，可下载到固定位置后运行
+curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/config-menu.sh -o ~/.openclaw/config-menu.sh && bash ~/.openclaw/config-menu.sh
 ```
 
 ## ✨ 功能特性
@@ -345,7 +345,7 @@ OpenClaw 使用以下配置方式：
 - **OpenClaw 配置**: `~/.openclaw/openclaw.json` - OpenClaw 内部配置（自动管理）
 - **命令行工具**: `openclaw config set` / `openclaw models set` 等
 
-> 💡 **注意**：配置主要通过安装向导或 `config-menu.sh` 完成，无需手动编辑配置文件
+> 💡 **注意**：配置主要通过安装向导或 `~/.openclaw/config-menu.sh` 完成，无需手动编辑配置文件
 
 ### 环境变量配置示例
 
@@ -476,7 +476,7 @@ sudo apt-get install -y nodejs
 npm update -g openclaw
 
 # 或使用配置菜单
-./config-menu.sh
+bash ~/.openclaw/config-menu.sh
 # 选择 [7] 高级设置 → [7] 更新 OpenClaw
 ```
 
