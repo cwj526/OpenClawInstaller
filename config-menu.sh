@@ -104,6 +104,46 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+run_with_timeout() {
+    local timeout_seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_seconds" "$@"
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+
+try:
+    completed = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    sys.stdout.write(completed.stdout or "")
+    sys.exit(completed.returncode)
+except subprocess.TimeoutExpired as exc:
+    output = exc.stdout or ""
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    sys.stdout.write(output)
+    sys.exit(124)
+PY
+        return $?
+    fi
+
+    "$@"
+}
+
 print_exit_hint() {
     echo -e "${GRAY}输入 q 可安全退出脚本${NC}"
 }
@@ -919,9 +959,14 @@ test_ai_connection() {
     echo ""
     
     local result
-    # 添加 || true 防止命令失败导致函数退出
-    result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
+    set +e
+    result=$(run_with_timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
     local exit_code=$?
+    set -e
+
+    if [ "$exit_code" = "124" ] && [ -z "$result" ]; then
+        result="测试超时（30秒）"
+    fi
     
     # 过滤掉 Node.js 警告信息和 JavaScript 错误
     result=$(echo "$result" | grep -v "ExperimentalWarning" | grep -v "at emitExperimentalWarning" | grep -v "at ModuleLoader" | grep -v "at callTranslator" | grep -v "Cannot read properties of undefined" | grep -v "TypeError:" | grep -v "ReferenceError:")

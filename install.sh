@@ -84,6 +84,46 @@ log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
 }
 
+run_with_timeout() {
+    local timeout_seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$timeout_seconds" "$@"
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+cmd = sys.argv[2:]
+
+try:
+    completed = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    sys.stdout.write(completed.stdout or "")
+    sys.exit(completed.returncode)
+except subprocess.TimeoutExpired as exc:
+    output = exc.stdout or ""
+    if isinstance(output, bytes):
+        output = output.decode(errors="replace")
+    sys.stdout.write(output)
+    sys.exit(124)
+PY
+        return $?
+    fi
+
+    "$@"
+}
+
 print_exit_hint() {
     echo -e "${GRAY}输入 q 可安全退出脚本${NC}"
 }
@@ -1651,19 +1691,14 @@ test_api_connection() {
         local result
         local exit_code
         
-        # 使用 timeout 命令（如果可用），否则直接运行
-        # 注意：添加 || true 防止 set -e 导致脚本退出
-        if command -v timeout &> /dev/null; then
-            result=$(timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
-            exit_code=${PIPESTATUS[0]}
-            # 如果 exit_code 为空，从 $? 获取（兼容不同 shell）
-            [ -z "$exit_code" ] && exit_code=$?
-            if [ "$exit_code" = "124" ]; then
-                result="测试超时（30秒）"
-            fi
-        else
-            result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
-            exit_code=$?
+        # 真实调用一次本地 agent，验证模型配置是否能完成单轮响应
+        set +e
+        result=$(run_with_timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
+        exit_code=$?
+        set -e
+
+        if [ "$exit_code" = "124" ]; then
+            result="${result:-测试超时（30秒）}"
         fi
         
         # 过滤掉 Node.js 警告信息和正常的系统日志
