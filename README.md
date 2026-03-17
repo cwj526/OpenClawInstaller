@@ -42,6 +42,12 @@
 curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/install.sh | bash
 ```
 
+脚本会自动检测当前环境：
+1. 如果未检测到可用的 OpenClaw 安装，则执行完整安装流程
+2. 如果已检测到本机已有 OpenClaw，则让用户选择：
+   - 继续完整安装/升级流程
+   - 只修改配置，接入或更新 Tuzi API
+
 安装脚本会自动：
 1. 检测系统环境并安装依赖
 2. 安装 OpenClaw
@@ -66,6 +72,38 @@ chmod +x install.sh config-menu.sh
 # 如果全局安装遇到权限问题，可安装到用户目录
 npm install -g openclaw --prefix ~/.local/openclaw
 export PATH="$HOME/.local/openclaw/bin:$PATH"
+```
+
+### 已安装 OpenClaw 的用户
+
+如果你已经装好了 OpenClaw，只想把 Tuzi API 配进去，仍然使用同一条命令即可：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/install.sh | bash
+```
+
+脚本检测到已有安装后，会自动跳过：
+1. 依赖安装
+2. OpenClaw 安装或升级
+3. 身份信息配置
+4. 开机自启动配置
+
+检测到已有 OpenClaw 时，脚本会先让你选择：
+1. 继续完整安装/升级流程
+2. 只修改配置，接入或更新 Tuzi API
+
+并只执行：
+1. 检查现有 `openclaw` 命令
+2. 引导填写 Tuzi API Key 和模型
+3. 写入 `~/.openclaw/env` 与 `~/.openclaw/openclaw.json`
+4. 测试 API 连接
+5. 可选启动或重启 OpenClaw 服务
+
+如果你需要强制指定模式，也可以本地执行：
+
+```bash
+./install.sh --full-install
+./install.sh --tuzi-only
 ```
 
 ### 安装完成后

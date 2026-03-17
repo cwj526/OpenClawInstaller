@@ -46,6 +46,7 @@ CONFIG_DIR="$HOME/.openclaw"
 MIN_NODE_VERSION=22
 GITHUB_REPO="cwj526/OpenClawInstaller"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main"
+INSTALL_MODE=""
 
 # ================================ 工具函数 ================================
 
@@ -80,6 +81,16 @@ log_error() {
 
 log_step() {
     echo -e "${BLUE}[STEP]${NC} $1"
+}
+
+print_exit_hint() {
+    echo -e "${GRAY}输入 q 可安全退出脚本${NC}"
+}
+
+safe_exit() {
+    echo ""
+    echo -e "${CYAN}已安全退出脚本。${NC}"
+    exit 0
 }
 
 download_latest_config_menu() {
@@ -126,11 +137,13 @@ confirm() {
         local prompt="[y/N]"
     fi
     
+    print_exit_hint
     echo -en "${YELLOW}$message $prompt: ${NC}"
     read response < "$TTY_INPUT"
     response=${response:-$default}
     
     case "$response" in
+        [qQ]|[qQ][uU][iI][tT]|[eE][xX][iI][tT]) safe_exit ;;
         [yY][eE][sS]|[yY]) return 0 ;;
         *) return 1 ;;
     esac
@@ -196,14 +209,20 @@ read_valid_number_choice() {
     local choice=""
 
     while true; do
+        print_exit_hint
         echo -en "$prompt"
         read choice < "$TTY_INPUT"
         choice=${choice:-$default_value}
+        case "$choice" in
+            [qQ]|[qQ][uU][iI][tT]|[eE][xX][iI][tT])
+                safe_exit
+                ;;
+        esac
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge "$min_value" ] && [ "$choice" -le "$max_value" ]; then
             printf -v "$result_var" '%s' "$choice"
             return 0
         fi
-        log_error "输入无效，请输入 $min_value-$max_value 之间的数字"
+        log_error "输入无效，请输入 $min_value-$max_value 之间的数字，或输入 q 退出"
     done
 }
 
@@ -221,6 +240,135 @@ read_nonempty_value() {
         fi
         log_error "输入不能为空，请重新输入"
     done
+}
+
+show_usage() {
+    cat << EOF
+用法:
+  bash install.sh
+  bash install.sh --tuzi-only
+  bash install.sh --full-install
+
+参数:
+  --tuzi-only      强制跳过安装，仅接入或更新 Tuzi API 配置
+  --full-install   强制执行完整安装流程
+  -h, --help       显示帮助
+EOF
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tuzi-only)
+                INSTALL_MODE="tuzi-only"
+                ;;
+            --full-install)
+                INSTALL_MODE="full-install"
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                log_error "未知参数: $1"
+                show_usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+is_openclaw_ready() {
+    if ! check_command openclaw; then
+        return 1
+    fi
+
+    if ! openclaw --version >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if [ -f "$HOME/.openclaw/openclaw.json" ] || [ -f "$HOME/.openclaw/env" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+is_tuzi_configured() {
+    local env_file="$HOME/.openclaw/env"
+
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$env_file" 2>/dev/null || true
+
+    if [ -n "$TUZI_GROUP" ] && [ -n "$TUZI_MODEL" ] && [ -n "$TUZI_API_KEY" ]; then
+        return 0
+    fi
+
+    if [ -n "$TUZI_CLAUDE_CODE_API_KEY" ] || [ -n "$TUZI_CODEX_API_KEY" ]; then
+        return 0
+    fi
+
+    return 1
+}
+
+show_current_tuzi_config() {
+    local env_file="$HOME/.openclaw/env"
+
+    if [ ! -f "$env_file" ]; then
+        return 0
+    fi
+
+    # shellcheck disable=SC1090
+    source "$env_file" 2>/dev/null || true
+
+    echo -e "${CYAN}当前 Tuzi 配置:${NC}"
+    if [ -n "$TUZI_GROUP" ]; then
+        echo -e "  当前激活分组: ${WHITE}$TUZI_GROUP${NC}"
+    fi
+    if [ -n "$TUZI_MODEL" ]; then
+        echo -e "  当前主模型: ${WHITE}$TUZI_MODEL${NC}"
+    fi
+    if [ -n "$TUZI_MODELS" ]; then
+        echo -e "  当前模型列表: ${WHITE}$TUZI_MODELS${NC}"
+    fi
+    if [ -n "$TUZI_CLAUDE_CODE_API_KEY" ]; then
+        echo -e "  Claude-Code: ${GREEN}已配置${NC}"
+        [ -n "$TUZI_CLAUDE_CODE_MODEL" ] && echo -e "    主模型: ${WHITE}$TUZI_CLAUDE_CODE_MODEL${NC}"
+    else
+        echo -e "  Claude-Code: ${GRAY}(未配置)${NC}"
+    fi
+    if [ -n "$TUZI_CODEX_API_KEY" ]; then
+        echo -e "  Codex: ${GREEN}已配置${NC}"
+        [ -n "$TUZI_CODEX_MODEL" ] && echo -e "    主模型: ${WHITE}$TUZI_CODEX_MODEL${NC}"
+    else
+        echo -e "  Codex: ${GRAY}(未配置)${NC}"
+    fi
+}
+
+detect_install_mode() {
+    if [ -n "$INSTALL_MODE" ]; then
+        return 0
+    fi
+
+    if is_openclaw_ready; then
+        echo -e "${CYAN}检测到本机已经安装 OpenClaw。${NC}"
+        echo ""
+        echo "  1) 继续完整安装/升级流程"
+        echo "  2) 只修改配置，接入或更新 Tuzi API"
+        echo ""
+        read_valid_number_choice "${YELLOW}请选择 [1-2] (默认: 2): ${NC}" 1 2 2 install_choice
+        case "$install_choice" in
+            1) INSTALL_MODE="full-install" ;;
+            *) INSTALL_MODE="tuzi-only" ;;
+        esac
+    else
+        INSTALL_MODE="full-install"
+    fi
 }
 
 get_shell_rc() {
@@ -1662,9 +1810,81 @@ run_config_menu() {
     return $?
 }
 
+run_tuzi_only_setup() {
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}        🔌 已安装 OpenClaw，快速接入 Tuzi API${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    if ! check_command openclaw; then
+        log_error "未检测到 openclaw 命令"
+        echo ""
+        echo -e "${YELLOW}该模式仅适用于已安装 OpenClaw 的用户。${NC}"
+        echo -e "${YELLOW}请改用完整安装模式，或先自行安装 OpenClaw 后再运行:${NC}"
+        echo "  bash install.sh --full-install"
+        exit 1
+    fi
+
+    log_info "检测到 OpenClaw: $(openclaw --version 2>/dev/null || echo 'installed')"
+    create_directories
+    init_openclaw_config
+
+    echo ""
+    echo -e "${GRAY}本模式会跳过依赖安装、OpenClaw 安装、身份配置和开机自启动。${NC}"
+    echo -e "${GRAY}只会写入 ~/.openclaw/env 与 ~/.openclaw/openclaw.json 的 Tuzi 配置。${NC}"
+    echo ""
+
+    local should_update_config=true
+    if is_tuzi_configured; then
+        log_info "检测到当前环境已经存在 Tuzi 配置"
+        echo ""
+        show_current_tuzi_config
+        echo ""
+        if ! confirm "是否修改当前 Tuzi 配置？" "n"; then
+            should_update_config=false
+            log_info "保留现有 Tuzi 配置"
+        fi
+    fi
+
+    if [ "$should_update_config" = true ]; then
+        setup_ai_provider
+        configure_openclaw_model
+        test_api_connection
+
+        echo ""
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${GREEN}          ✓ Tuzi API 已接入到现有 OpenClaw${NC}"
+        echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    else
+        echo ""
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${WHITE}          当前 Tuzi 配置保持不变${NC}"
+        echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    fi
+
+    echo ""
+    echo -e "${CYAN}后续可用命令:${NC}"
+    echo "  openclaw models status"
+    echo "  source ~/.openclaw/env && openclaw gateway"
+    echo "  bash ./config-menu.sh"
+    echo ""
+
+    if confirm "是否现在启动或重启 OpenClaw 服务？" "y"; then
+        start_openclaw_service
+    fi
+
+    echo ""
+    echo -e "${WHITE}如需继续配置消息渠道，可运行:${NC}"
+    echo "  bash ./config-menu.sh"
+    echo "  或 curl -fsSL $GITHUB_RAW_URL/config-menu.sh | bash"
+    echo ""
+}
+
 # ================================ 主函数 ================================
 
 main() {
+    parse_args "$@"
     print_banner
     
     echo -e "${YELLOW}⚠️  警告: OpenClaw 需要完全的计算机权限${NC}"
@@ -1677,8 +1897,21 @@ main() {
     fi
     
     echo ""
+    detect_install_mode
+
+    if [ "$INSTALL_MODE" = "tuzi-only" ]; then
+        log_info "检测到已有 OpenClaw 安装与配置，跳过安装步骤，直接进入 Tuzi API 配置"
+        detect_os
+        check_root
+        run_tuzi_only_setup
+        echo -e "${GREEN}🦞 Tuzi API 配置完成！祝你使用愉快！${NC}"
+        echo ""
+        exit 0
+    fi
+
     detect_os
     check_root
+    log_info "未检测到可复用的 OpenClaw 安装，开始完整安装流程"
     install_dependencies
     create_directories
     install_openclaw
