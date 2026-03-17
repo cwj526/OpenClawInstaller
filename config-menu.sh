@@ -29,8 +29,14 @@ fi
 read_input() {
     local prompt="$1"
     local var_name="$2"
+    local value=""
+    print_exit_hint
     echo -en "$prompt"
-    read $var_name < "$TTY_INPUT"
+    read value < "$TTY_INPUT"
+    if should_exit_input "$value"; then
+        safe_exit
+    fi
+    printf -v "$var_name" '%s' "$value"
 }
 
 # ================================ 颜色定义 ================================
@@ -98,6 +104,91 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+print_exit_hint() {
+    echo -e "${GRAY}输入 q 可安全退出脚本${NC}"
+}
+
+safe_exit() {
+    echo ""
+    echo -e "${CYAN}已安全退出脚本。${NC}"
+    exit 0
+}
+
+should_exit_input() {
+    local value="$1"
+    case "$value" in
+        [qQ]|[qQ][uU][iI][tT]|[eE][xX][iI][tT]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+shell_quote_value() {
+    local value="$1"
+    printf '%q' "$value"
+}
+
+append_env_kv() {
+    local env_file="$1"
+    local key="$2"
+    local value="$3"
+    local escaped_value
+    escaped_value=$(shell_quote_value "$value")
+    printf 'export %s=%s\n' "$key" "$escaped_value" >> "$env_file"
+}
+
+write_env_header() {
+    local env_file="$1"
+    local source_label="$2"
+    cat > "$env_file" << EOF
+# OpenClaw 环境变量配置
+# 由${source_label}自动生成: $(date '+%Y-%m-%d %H:%M:%S')
+EOF
+}
+
+get_env_file_value() {
+    local env_file="$1"
+    local key="$2"
+    if [ ! -f "$env_file" ]; then
+        return 0
+    fi
+
+    local env_line
+    env_line=$(grep "^export ${key}=" "$env_file" 2>/dev/null | tail -1)
+    if [ -z "$env_line" ]; then
+        return 0
+    fi
+
+    local env_value="${env_line#*=}"
+    bash -c '
+eval "value=$1"
+printf "%s" "$value"
+' _ "$env_value" 2>/dev/null
+}
+
+get_tuzi_default_group() {
+    local env_file="${1:-$OPENCLAW_ENV}"
+    local default_group=""
+
+    default_group=$(get_env_file_value "$env_file" "TUZI_DEFAULT_GROUP")
+    if [ -z "$default_group" ]; then
+        default_group=$(get_env_file_value "$env_file" "TUZI_GROUP")
+    fi
+
+    printf '%s' "$default_group"
+}
+
+get_tuzi_default_model() {
+    local env_file="${1:-$OPENCLAW_ENV}"
+    local default_model=""
+
+    default_model=$(get_env_file_value "$env_file" "TUZI_DEFAULT_MODEL")
+    if [ -z "$default_model" ]; then
+        default_model=$(get_env_file_value "$env_file" "TUZI_MODEL")
+    fi
+
+    printf '%s' "$default_model"
+}
+
 press_enter() {
     echo ""
     echo -en "${GRAY}按 Enter 键继续...${NC}"
@@ -114,11 +205,13 @@ confirm() {
         local prompt="[y/N]"
     fi
     
+    print_exit_hint
     echo -en "${YELLOW}$message $prompt: ${NC}"
     read response < "$TTY_INPUT"
     response=${response:-$default}
     
     case "$response" in
+        [qQ]|[qQ][uU][iI][tT]|[eE][xX][iI][tT]) safe_exit ;;
         [yY][eE][sS]|[yY]) return 0 ;;
         *) return 1 ;;
     esac
@@ -228,9 +321,7 @@ PYEOF
 # 从环境变量文件读取配置
 get_env_value() {
     local key=$1
-    if [ -f "$OPENCLAW_ENV" ]; then
-        grep "^export $key=" "$OPENCLAW_ENV" 2>/dev/null | sed 's/.*=//' | tr -d '"'
-    fi
+    get_env_file_value "$OPENCLAW_ENV" "$key"
 }
 
 read_valid_number_choice() {
@@ -242,13 +333,17 @@ read_valid_number_choice() {
     local choice=""
 
     while true; do
+        print_exit_hint
         read -p "$(echo -e "$prompt")" choice < "$TTY_INPUT"
         choice=${choice:-$default_value}
+        if should_exit_input "$choice"; then
+            safe_exit
+        fi
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge "$min_value" ] && [ "$choice" -le "$max_value" ]; then
             printf -v "$result_var" '%s' "$choice"
             return 0
         fi
-        log_error "输入无效，请输入 $min_value-$max_value 之间的数字"
+        log_error "输入无效，请输入 $min_value-$max_value 之间的数字，或输入 q 退出"
     done
 }
 
@@ -258,13 +353,30 @@ read_nonempty_value() {
     local value=""
 
     while true; do
+        print_exit_hint
         read -p "$(echo -e "$prompt")" value < "$TTY_INPUT"
+        if should_exit_input "$value"; then
+            safe_exit
+        fi
         if [ -n "$value" ]; then
             printf -v "$result_var" '%s' "$value"
             return 0
         fi
-        log_error "输入不能为空，请重新输入"
+        log_error "输入不能为空，请重新输入，或输入 q 退出"
     done
+}
+
+read_value_allow_empty() {
+    local prompt="$1"
+    local result_var="$2"
+    local value=""
+
+    print_exit_hint
+    read -p "$(echo -e "$prompt")" value < "$TTY_INPUT"
+    if should_exit_input "$value"; then
+        safe_exit
+    fi
+    printf -v "$result_var" '%s' "$value"
 }
 
 get_openclaw_primary_model() {
@@ -295,6 +407,27 @@ except Exception:
     print('')
 " 2>/dev/null
     fi
+}
+
+is_tuzi_group_complete() {
+    local group="$1"
+    local key_var=""
+    local model_var=""
+
+    case "$group" in
+        codex)
+            key_var="TUZI_CODEX_API_KEY"
+            model_var="TUZI_CODEX_MODEL"
+            ;;
+        *)
+            key_var="TUZI_CLAUDE_CODE_API_KEY"
+            model_var="TUZI_CLAUDE_CODE_MODEL"
+            ;;
+    esac
+
+    local group_key=$(get_env_value "$key_var")
+    local group_model=$(get_env_value "$model_var")
+    [ -n "$group_key" ] && [ -n "$group_model" ]
 }
 
 get_tuzi_group_settings() {
@@ -452,53 +585,48 @@ choose_tuzi_models() {
 }
 
 write_tuzi_env_file() {
-    local active_group="$1"
-    local active_provider_id="$2"
-    local active_base_url="$3"
-    local active_api_type="$4"
-    local active_api_key="$5"
-    local active_model="$6"
-    local active_models="$7"
+    local default_group="$1"
+    local default_provider_id="$2"
+    local default_base_url="$3"
+    local default_api_type="$4"
+    local default_model="$5"
+    local default_models="$6"
 
     local env_file="$OPENCLAW_ENV"
-    local claude_key="$8"
-    local claude_model="$9"
-    local claude_models="${10}"
-    local codex_key="${11}"
-    local codex_model="${12}"
-    local codex_models="${13}"
+    local claude_key="$7"
+    local claude_model="$8"
+    local claude_models="$9"
+    local codex_key="${10}"
+    local codex_model="${11}"
+    local codex_models="${12}"
 
-    cat > "$env_file" << EOF
-# OpenClaw 环境变量配置
-# 由配置菜单自动生成: $(date '+%Y-%m-%d %H:%M:%S')
-export TUZI_API_KEY=$active_api_key
-export TUZI_GROUP=$active_group
-export TUZI_PROVIDER_ID=$active_provider_id
-export TUZI_BASE_URL=$active_base_url
-export TUZI_API_TYPE=$active_api_type
-export TUZI_MODEL=$active_model
-EOF
+    write_env_header "$env_file" "配置菜单"
+    append_env_kv "$env_file" "TUZI_DEFAULT_GROUP" "$default_group"
+    append_env_kv "$env_file" "TUZI_DEFAULT_PROVIDER_ID" "$default_provider_id"
+    append_env_kv "$env_file" "TUZI_DEFAULT_BASE_URL" "$default_base_url"
+    append_env_kv "$env_file" "TUZI_DEFAULT_API_TYPE" "$default_api_type"
+    append_env_kv "$env_file" "TUZI_DEFAULT_MODEL" "$default_model"
 
-    if [ -n "$active_models" ]; then
-        echo "export TUZI_MODELS=$active_models" >> "$env_file"
+    if [ -n "$default_models" ]; then
+        append_env_kv "$env_file" "TUZI_DEFAULT_MODELS" "$default_models"
     fi
     if [ -n "$claude_key" ]; then
-        echo "export TUZI_CLAUDE_CODE_API_KEY=$claude_key" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CLAUDE_CODE_API_KEY" "$claude_key"
     fi
     if [ -n "$claude_model" ]; then
-        echo "export TUZI_CLAUDE_CODE_MODEL=$claude_model" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CLAUDE_CODE_MODEL" "$claude_model"
     fi
     if [ -n "$claude_models" ]; then
-        echo "export TUZI_CLAUDE_CODE_MODELS=$claude_models" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CLAUDE_CODE_MODELS" "$claude_models"
     fi
     if [ -n "$codex_key" ]; then
-        echo "export TUZI_CODEX_API_KEY=$codex_key" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CODEX_API_KEY" "$codex_key"
     fi
     if [ -n "$codex_model" ]; then
-        echo "export TUZI_CODEX_MODEL=$codex_model" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CODEX_MODEL" "$codex_model"
     fi
     if [ -n "$codex_models" ]; then
-        echo "export TUZI_CODEX_MODELS=$codex_models" >> "$env_file"
+        append_env_kv "$env_file" "TUZI_CODEX_MODELS" "$codex_models"
     fi
 }
 
@@ -508,6 +636,7 @@ configure_tuzi_provider() {
     local primary_model="$3"
     local models_csv="$4"
     local config_file="$5"
+    local update_default="${6:-false}"
 
     local settings
     settings=$(get_tuzi_group_settings "$group")
@@ -539,6 +668,7 @@ configure_tuzi_provider() {
   "primary_model": "$primary_model",
   "models_csv": "$models_csv",
   "group_label": "$group_label",
+  "update_default": $update_default,
   "env_prefix": "$env_prefix"
 }
 EOFVARS
@@ -586,14 +716,16 @@ config.models.providers[vars.provider_id] = {
 config.agents ??= {};
 config.agents.defaults ??= {};
 const fallbackModels = modelIds.slice(1).map((modelId) => vars.provider_id + '/' + modelId);
-config.agents.defaults.model = {
-  primary: vars.provider_id + '/' + vars.primary_model,
-  fallbacks: fallbackModels
-};
 config.agents.defaults.models ??= {};
 modelIds.forEach((modelId) => {
   config.agents.defaults.models[vars.provider_id + '/' + modelId] = {};
 });
+if (vars.update_default || !config.agents.defaults.model?.primary) {
+  config.agents.defaults.model = {
+    primary: vars.provider_id + '/' + vars.primary_model,
+    fallbacks: fallbackModels
+  };
+}
 
 fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
 console.log('Tuzi provider configured: ' + vars.group_label);
@@ -616,6 +748,7 @@ console.log('Tuzi provider configured: ' + vars.group_label);
   "api_type": "$api_type",
   "primary_model": "$primary_model",
   "models_csv": "$models_csv",
+  "update_default": $update_default,
   "env_prefix": "$env_prefix"
 }
 EOFVARS
@@ -659,13 +792,14 @@ config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']]
 }
 
 defaults = config.setdefault('agents', {}).setdefault('defaults', {})
-defaults['model'] = {
-    'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
-    'fallbacks': [f\"{vars['provider_id']}/{model_id}\" for model_id in model_ids[1:]]
-}
 defaults.setdefault('models', {})
 for model_id in model_ids:
     defaults['models'][f\"{vars['provider_id']}/{model_id}\"] = {}
+if vars.get('update_default') or not defaults.get('model', {}).get('primary'):
+    defaults['model'] = {
+        'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
+        'fallbacks': [f\"{vars['provider_id']}/{model_id}\" for model_id in model_ids[1:]]
+    }
 
 with open(vars['config_file'], 'w') as f:
     json.dump(config, f, indent=2)
@@ -1349,10 +1483,10 @@ show_status() {
         fi
         
         # 检查 API Key 配置
-        if grep -q "TUZI_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
-            local tuzi_group=$(get_env_value "TUZI_GROUP")
+        if is_tuzi_group_complete "claude-code" || is_tuzi_group_complete "codex"; then
+            local tuzi_group=$(get_tuzi_default_group)
             echo -e "    • AI 提供商: ${WHITE}Tuzi API${NC}"
-            [ -n "$tuzi_group" ] && echo -e "    • Tuzi 分组: ${WHITE}$tuzi_group${NC}"
+            [ -n "$tuzi_group" ] && echo -e "    • 默认分组: ${WHITE}$tuzi_group${NC}"
         elif grep -q "ANTHROPIC_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
             echo -e "    • AI 提供商: ${WHITE}Anthropic${NC}"
         elif grep -q "OPENAI_API_KEY" "$OPENCLAW_ENV" 2>/dev/null; then
@@ -1395,7 +1529,7 @@ config_tuzi() {
     echo -e "${GRAY}获取 Key: https://api.tu-zi.com/token${NC}"
     echo ""
 
-    local active_group=$(get_env_value "TUZI_GROUP")
+    local active_group=$(get_tuzi_default_group)
     local claude_key=$(get_env_value "TUZI_CLAUDE_CODE_API_KEY")
     local claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
     local claude_models=$(get_env_value "TUZI_CLAUDE_CODE_MODELS")
@@ -1404,22 +1538,26 @@ config_tuzi() {
     local codex_models=$(get_env_value "TUZI_CODEX_MODELS")
 
     echo -e "${CYAN}当前配置:${NC}"
-    if [ -n "$claude_key" ]; then
+    if [ -n "$claude_key" ] && [ -n "$claude_model" ]; then
         echo -e "  Claude-Code: ${GREEN}已配置${NC}"
-        [ -n "$claude_model" ] && echo -e "    主模型: ${WHITE}$claude_model${NC}"
+        echo -e "    主模型: ${WHITE}$claude_model${NC}"
         [ -n "$claude_models" ] && echo -e "    已选模型: ${WHITE}$claude_models${NC}"
+    elif [ -n "$claude_key" ]; then
+        echo -e "  Claude-Code: ${YELLOW}未完成配置${NC}"
     else
         echo -e "  Claude-Code: ${GRAY}(未配置)${NC}"
     fi
-    if [ -n "$codex_key" ]; then
+    if [ -n "$codex_key" ] && [ -n "$codex_model" ]; then
         echo -e "  Codex: ${GREEN}已配置${NC}"
-        [ -n "$codex_model" ] && echo -e "    主模型: ${WHITE}$codex_model${NC}"
+        echo -e "    主模型: ${WHITE}$codex_model${NC}"
         [ -n "$codex_models" ] && echo -e "    已选模型: ${WHITE}$codex_models${NC}"
+    elif [ -n "$codex_key" ]; then
+        echo -e "  Codex: ${YELLOW}未完成配置${NC}"
     else
         echo -e "  Codex: ${GRAY}(未配置)${NC}"
     fi
     if [ -n "$active_group" ]; then
-        echo -e "  当前激活分组: ${WHITE}$active_group${NC}"
+        echo -e "  默认 Provider: ${WHITE}$active_group${NC}"
     fi
     echo ""
 
@@ -1453,7 +1591,7 @@ config_tuzi() {
         local masked_key="${current_key:0:8}...${current_key: -4}"
         echo -e "当前 ${group} API Key: ${GRAY}$masked_key${NC}"
     fi
-    read -p "$(echo -e "${YELLOW}输入 API Key (留空保持不变): ${NC}")" input_key < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}输入 API Key (留空保持不变): ${NC}" input_key
 
     local api_key="$current_key"
     if [ -n "$input_key" ]; then
@@ -3214,8 +3352,7 @@ config_channels() {
     print_menu_item "0" "返回主菜单" "↩️"
     echo ""
     
-    echo -en "${YELLOW}请选择 [0-7]: ${NC}"
-    read choice < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}请选择 [0-7]: ${NC}" choice
     
     case $choice in
         1) config_telegram ;;
@@ -3983,8 +4120,7 @@ config_security() {
     print_menu_item "0" "返回主菜单" "↩️"
     echo ""
     
-    echo -en "${YELLOW}请选择 [0-5]: ${NC}"
-    read choice < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}请选择 [0-5]: ${NC}" choice
     
     case $choice in
         1)
@@ -4086,8 +4222,7 @@ manage_service() {
     print_menu_item "0" "返回主菜单" "↩️"
     echo ""
     
-    echo -en "${YELLOW}请选择 [0-8]: ${NC}"
-    read choice < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}请选择 [0-8]: ${NC}" choice
     
     case $choice in
         1)
@@ -4703,6 +4838,25 @@ save_tuzi_ai_config() {
 
     local env_file="$OPENCLAW_ENV"
     local config_file="$OPENCLAW_JSON"
+    local existing_default_group=$(get_tuzi_default_group)
+    local existing_default_provider_id=$(get_env_value "TUZI_DEFAULT_PROVIDER_ID")
+    local existing_default_base_url=$(get_env_value "TUZI_DEFAULT_BASE_URL")
+    local existing_default_api_type=$(get_env_value "TUZI_DEFAULT_API_TYPE")
+    local existing_default_model=$(get_tuzi_default_model)
+    local existing_default_models=$(get_env_value "TUZI_DEFAULT_MODELS")
+    local should_update_default="false"
+    if [ -z "$existing_default_provider_id" ]; then
+        existing_default_provider_id=$(get_env_value "TUZI_PROVIDER_ID")
+    fi
+    if [ -z "$existing_default_base_url" ]; then
+        existing_default_base_url=$(get_env_value "TUZI_BASE_URL")
+    fi
+    if [ -z "$existing_default_api_type" ]; then
+        existing_default_api_type=$(get_env_value "TUZI_API_TYPE")
+    fi
+    if [ -z "$existing_default_models" ]; then
+        existing_default_models=$(get_env_value "TUZI_MODELS")
+    fi
     local settings
     settings=$(get_tuzi_group_settings "$group")
     local provider_id="${settings%%|*}"
@@ -4728,19 +4882,34 @@ save_tuzi_ai_config() {
         claude_models="$selected_models"
     fi
 
-    write_tuzi_env_file "$group" "$provider_id" "$base_url" "$api_type" "$api_key" "$primary_model" "$selected_models" \
+    if [ -z "$existing_default_group" ] || [ "$existing_default_group" = "$group" ]; then
+        should_update_default="true"
+    fi
+
+    if [ "$should_update_default" = "true" ]; then
+        existing_default_group="$group"
+        existing_default_provider_id="$provider_id"
+        existing_default_base_url="$base_url"
+        existing_default_api_type="$api_type"
+        existing_default_model="$primary_model"
+        existing_default_models="$selected_models"
+    fi
+
+    write_tuzi_env_file "$existing_default_group" "$existing_default_provider_id" "$existing_default_base_url" "$existing_default_api_type" "$existing_default_model" "$existing_default_models" \
         "$claude_key" "$claude_model" "$claude_models" "$codex_key" "$codex_model" "$codex_models"
 
     chmod 600 "$env_file"
 
-    if ! configure_tuzi_provider "$group" "$api_key" "$primary_model" "$selected_models" "$config_file"; then
+    if ! configure_tuzi_provider "$group" "$api_key" "$primary_model" "$selected_models" "$config_file" "$should_update_default"; then
         return 1
     fi
 
-    if check_openclaw_installed; then
+    if check_openclaw_installed && [ "$should_update_default" = "true" ]; then
         source "$env_file"
         openclaw models set "$provider_id/$primary_model" 2>/dev/null || \
             openclaw config set models.default "$provider_id/$primary_model" 2>/dev/null || true
+    elif check_openclaw_installed; then
+        log_info "已保留当前默认模型，新增 Provider: $provider_id/$primary_model"
     fi
 
     local shell_rc=""
@@ -5047,8 +5216,7 @@ advanced_settings() {
     print_menu_item "0" "返回主菜单" "↩️"
     echo ""
     
-    echo -en "${YELLOW}请选择 [0-7]: ${NC}"
-    read choice < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}请选择 [0-7]: ${NC}" choice
     
     case $choice in
         1)
@@ -5150,7 +5318,7 @@ restore_config() {
     done
     
     echo ""
-    read -p "$(echo -e "${YELLOW}选择要恢复的备份 [1-$((i-1))]: ${NC}")" choice
+    read_value_allow_empty "${YELLOW}选择要恢复的备份 [1-$((i-1))]: ${NC}" choice
     
     if [ -n "$choice" ] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
         local selected_backup="${backups[$((choice-1))]}"
@@ -5249,8 +5417,7 @@ quick_test_menu() {
     print_menu_item "0" "返回主菜单" "↩️"
     echo ""
     
-    echo -en "${YELLOW}请选择 [0-9/a]: ${NC}"
-    read choice < "$TTY_INPUT"
+    read_value_allow_empty "${YELLOW}请选择 [0-9/a]: ${NC}" choice
     
     case $choice in
         1) quick_test_ai ;;
@@ -5714,7 +5881,7 @@ run_all_tests() {
         
         case "$provider" in
             tuzi)
-                if [ "$TUZI_GROUP" = "codex" ]; then
+                if [ "$(get_tuzi_default_group)" = "codex" ]; then
                     test_url="${base_url:-https://api.tu-zi.com/v1}/responses"
                     http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$test_url" \
                         -H "Authorization: Bearer $api_key" -H "Content-Type: application/json" \
@@ -5824,8 +5991,7 @@ main() {
     # 主循环
     while true; do
         show_main_menu
-        echo -en "${YELLOW}请选择 [0-9]: ${NC}"
-        read choice < "$TTY_INPUT"
+        read_value_allow_empty "${YELLOW}请选择 [0-9]: ${NC}" choice
         
         case $choice in
             1) show_status ;;

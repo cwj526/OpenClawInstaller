@@ -188,8 +188,8 @@ curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/confi
 2. 输入该分组专用的 API Key
 3. 从预置模型列表中连续选择一个或多个模型
 4. 第一个模型会作为默认模型，其余模型会自动写入 fallback 列表，也支持自定义模型名称
-5. 如有需要，可再次进入配置流程添加另一个分组
-6. 脚本会自动写入 `~/.openclaw/openclaw.json` 并设置最后一次配置的分组为当前默认模型
+5. 如有需要，可再次进入配置流程添加另一个分组，两个分组会作为独立 Provider 一起写入 `~/.openclaw/openclaw.json`
+6. 首次配置会自动设置默认模型；后续新增另一个分组时会保留当前默认模型不变，除非你重新配置当前默认分组
 
 > 💡 API Key 获取地址: [https://api.tu-zi.com/token](https://api.tu-zi.com/token)
 >
