@@ -2247,7 +2247,7 @@ main() {
     echo -e "${YELLOW}    不建议在主要工作电脑上安装，建议使用专用服务器或虚拟机${NC}"
     echo ""
     
-    if ! confirm "是否继续安装？"; then
+    if ! confirm "确认已知，是否继续？"; then
         echo "安装已取消"
         exit 0
     fi
@@ -2298,7 +2298,7 @@ main() {
     echo -e "  🔧 ${CYAN}可视化配置${NC} - AI 模型、消息渠道一键配置"
     echo -e "  💻 ${CYAN}跨平台${NC} - 支持 macOS、Windows、Linux"
     echo ""
-    echo -e "  👉 ${PURPLE}下载地址: https://github.com/miaoxworld/openclaw-manager${NC}"
+    echo -e "  👉 ${PURPLE}下载地址: https://github.com/cwj526/openclaw-manager${NC}"
     echo ""
     
     # 询问是否打开配置菜单进行详细配置
