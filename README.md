@@ -131,7 +131,10 @@ curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/confi
 
 #### 可选：安装 `tuzi-skills`
 
-在 Tuzi API 配置完成后，安装器会介绍并询问你是否一键安装 [`tuziapi/tuzi-skills`](https://github.com/tuziapi/tuzi-skills)。这个 skills 集适合补充内容生成、内容处理和常用工具能力。
+在 Tuzi API 配置完成后，安装器会介绍并询问你是否一键安装 [`tuziapi/tuzi-skills`](https://github.com/tuziapi/tuzi-skills)。这是一个基于兔子 API 的 skills 集，支持 Claude Code 和 OpenClaw，适合补充内容生成、AI 生成后端和常用工具能力。
+
+仓库地址：
+[https://github.com/tuziapi/tuzi-skills](https://github.com/tuziapi/tuzi-skills)
 
 ```bash
 # 一键安装命令
@@ -203,6 +206,8 @@ npx skills add tuziapi/tuzi-skills --agent openclaw --yes
 6. 首次配置会自动设置默认模型；后续新增另一个分组时会保留当前默认模型不变，除非你重新配置当前默认分组
 
 > 💡 API Key 获取地址: [https://api.tu-zi.com/token](https://api.tu-zi.com/token)
+>
+> 💡 API Key 获取教程: [Bilibili 视频教程](https://www.bilibili.com/video/BV1k4PqzPEKz/?vd_source=1bbfadebd95fffa76963a8b99d5d96b9)
 >
 > ⚠️ `Claude-Code` 和 `Codex` 必须使用各自分组对应的 Key，不能混用
 
