@@ -4670,7 +4670,7 @@ manage_service() {
             echo "  curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/install.sh | bash"
             echo ""
             echo -e "${CYAN}或下载桌面版:${NC}"
-            echo "  https://github.com/miaoxworld/openclaw-manager"
+            echo "  https://github.com/cwj526/openclaw-manager"
             echo ""
             
             press_enter

@@ -1625,10 +1625,14 @@ run_onboard_wizard() {
         # 先配置 OpenClaw（设置环境变量和自定义 provider），然后再测试
         configure_openclaw_model
         test_api_connection
+        prompt_tuzi_skills_install
     else
         # 即使跳过配置，也可选择测试连接
         if confirm "是否测试现有 API 连接？" "y"; then
             test_api_connection
+        fi
+        if is_tuzi_configured; then
+            prompt_tuzi_skills_install
         fi
     fi
     
@@ -1964,6 +1968,55 @@ print_success() {
     echo ""
 }
 
+prompt_tuzi_skills_install() {
+    local install_cmd="npx skills add tuziapi/tuzi-skills --agent openclaw --yes"
+
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}           ✨ 可选：安装 tuzi-skills${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${WHITE}这个 skills 集适合补充内容生成、内容处理和常用工具能力。${NC}"
+    echo -e "  ${PURPLE}https://github.com/tuziapi/tuzi-skills${NC}"
+    echo ""
+    if ! confirm "是否现在一键安装 tuzi-skills？" "y"; then
+        echo ""
+        echo -e "${CYAN}稍后可手动安装:${NC}"
+        echo "  $install_cmd"
+        echo -e "${WHITE}详情请查看:${NC}"
+        echo "  https://github.com/tuziapi/tuzi-skills"
+        echo ""
+        return 0
+    fi
+
+    echo ""
+    log_step "正在安装 tuzi-skills..."
+
+    local install_exit
+    set +e
+    eval "$install_cmd"
+    install_exit=$?
+    set -e
+
+    if [ $install_exit -eq 0 ]; then
+        log_info "tuzi-skills 安装成功"
+        echo ""
+        echo -e "${WHITE}安装后可直接告诉 Agent：${NC}"
+        echo "  请帮我用 tuzi-skills 生成内容或图片"
+        echo -e "${WHITE}详情请查看:${NC}"
+        echo "  https://github.com/tuziapi/tuzi-skills"
+        echo ""
+    else
+        log_warn "tuzi-skills 安装失败，可稍后手动安装"
+        echo ""
+        echo -e "${WHITE}你可以稍后手动运行:${NC}"
+        echo "  $install_cmd"
+        echo -e "${WHITE}详情请查看:${NC}"
+        echo "  https://github.com/tuziapi/tuzi-skills"
+        echo ""
+    fi
+}
+
 # 启动 OpenClaw Gateway 服务
 start_openclaw_service() {
     echo ""
@@ -2150,12 +2203,15 @@ run_tuzi_only_setup() {
         setup_ai_provider
         configure_openclaw_model
         test_api_connection
+        prompt_tuzi_skills_install
 
         echo ""
         echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${GREEN}          ✓ Tuzi API 已接入到现有 OpenClaw${NC}"
         echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     else
+        prompt_tuzi_skills_install
+
         echo ""
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${WHITE}          当前 Tuzi 配置保持不变${NC}"
