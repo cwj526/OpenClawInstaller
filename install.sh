@@ -643,7 +643,14 @@ detect_install_mode() {
 }
 
 get_shell_rc() {
-    if [ -f "$HOME/.zshrc" ]; then
+    local shell_name
+    shell_name=$(basename "${SHELL:-}")
+
+    if [ "$shell_name" = "zsh" ]; then
+        echo "$HOME/.zshrc"
+    elif [ "$shell_name" = "bash" ]; then
+        echo "$HOME/.bashrc"
+    elif [ -f "$HOME/.zshrc" ]; then
         echo "$HOME/.zshrc"
     elif [ -f "$HOME/.bashrc" ]; then
         echo "$HOME/.bashrc"
@@ -667,6 +674,20 @@ ensure_path_export() {
             echo "$export_line" >> "$shell_rc"
         fi
     fi
+}
+
+print_path_activation_hint() {
+    local npm_bin="$1"
+    local shell_rc
+    shell_rc=$(get_shell_rc)
+
+    log_info "已安装到用户目录: ${npm_bin%/bin}"
+    log_info "PATH 配置已写入: $shell_rc"
+    echo ""
+    echo -e "${YELLOW}提示:${NC} 安装脚本无法直接修改你当前外层终端的 PATH。"
+    echo "请执行下面任一命令后再使用 openclaw:"
+    echo "  source \"$shell_rc\""
+    echo "  export PATH=\"$npm_bin:\$PATH\""
 }
 
 install_homebrew() {
@@ -797,16 +818,13 @@ install_openclaw() {
         log_info "已完成全局安装"
     else
         log_warn "全局安装失败，正在切换到用户目录安装..."
-        local npm_prefix="$HOME/.local/openclaw"
+        local npm_prefix="$HOME/.local"
         local npm_bin="$npm_prefix/bin"
         mkdir -p "$npm_prefix"
 
         if npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm --prefix "$npm_prefix"; then
-            export PATH="$npm_bin:$PATH"
             ensure_path_export "export PATH=\"$npm_bin:\$PATH\""
-            hash -r 2>/dev/null || true
-            log_info "已安装到用户目录: $npm_prefix"
-            log_info "当前会话已自动加入 PATH"
+            print_path_activation_hint "$npm_bin"
         else
             log_error "OpenClaw 安装失败"
             echo ""
@@ -819,7 +837,11 @@ install_openclaw() {
     fi
 
     # 验证安装
-    if check_command openclaw; then
+    if check_command openclaw || [ -x "${npm_bin:-}/openclaw" ]; then
+        if ! check_command openclaw && [ -x "${npm_bin:-}/openclaw" ]; then
+            export PATH="$npm_bin:$PATH"
+            hash -r 2>/dev/null || true
+        fi
         log_info "OpenClaw 安装成功: $(openclaw --version 2>/dev/null || echo 'installed')"
         init_openclaw_config
     else

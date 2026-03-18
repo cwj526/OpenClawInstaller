@@ -70,8 +70,8 @@ chmod +x install.sh config-menu.sh
 ./install.sh
 
 # 如果全局安装遇到权限问题，可安装到用户目录
-npm install -g openclaw --prefix ~/.local/openclaw
-export PATH="$HOME/.local/openclaw/bin:$PATH"
+npm install -g openclaw --prefix ~/.local
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### 已安装 OpenClaw 的用户
