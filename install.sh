@@ -1671,6 +1671,7 @@ setup_ai_provider() {
     esac
 
     echo ""
+    echo -e "${GRAY}获取 API Key 教程: https://www.bilibili.com/video/BV1k4PqzPEKz/?vd_source=1bbfadebd95fffa76963a8b99d5d96b9${NC}"
     read_secret_value "${YELLOW}输入 API Key: ${NC}" AI_KEY
     echo ""
     choose_tuzi_models "$TUZI_GROUP" AI_MODELS
