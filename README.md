@@ -133,6 +133,10 @@ curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/confi
 
 在 Tuzi API 配置完成后，安装器会介绍并询问你是否一键安装 [`tuziapi/tuzi-skills`](https://github.com/tuziapi/tuzi-skills)。这是一个基于兔子 API 的 skills 集，支持 Claude Code 和 OpenClaw，适合补充内容生成、AI 生成后端和常用工具能力。
 
+<p align="center">
+  <img src="photo/skills.png" alt="tuzi-skills" width="600">
+</p>
+
 仓库地址：
 [https://github.com/tuziapi/tuzi-skills](https://github.com/tuziapi/tuzi-skills)
 
