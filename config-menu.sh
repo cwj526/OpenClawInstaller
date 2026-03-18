@@ -62,6 +62,7 @@ CONFIG_DIR="$HOME/.openclaw"
 OPENCLAW_ENV="$CONFIG_DIR/env"
 OPENCLAW_JSON="$CONFIG_DIR/openclaw.json"
 BACKUP_DIR="$CONFIG_DIR/backups"
+TUZI_CACHE_DIR="$CONFIG_DIR/cache"
 
 # ================================ 工具函数 ================================
 
@@ -488,7 +489,7 @@ get_tuzi_group_settings() {
     local group="$1"
     case "$group" in
         codex)
-            echo "tuzi-codex|https://api.tu-zi.com/v1|openai-responses|Codex|TUZI_CODEX"
+            echo "tuzi-codex|https://api.tu-zi.com/v1|openai-completions|Codex|TUZI_CODEX"
             ;;
         *)
             echo "tuzi-claude-code|https://api.tu-zi.com|anthropic-messages|Claude-Code|TUZI_CLAUDE_CODE"
@@ -591,51 +592,590 @@ choose_tuzi_model() {
 
 choose_tuzi_models() {
     local group="$1"
-    local result_var="$2"
-    local collected_models=()
-    local picked_model=""
+    local api_key="$2"
+    local result_var="$3"
 
-    while true; do
-        local allow_finish="false"
-        [ ${#collected_models[@]} -gt 0 ] && allow_finish="true"
-        choose_tuzi_model "$group" picked_model "$allow_finish"
-        if [ "$picked_model" = "__DONE__" ]; then
-            break
-        fi
-        if [ -z "$picked_model" ]; then
-            continue
-        fi
+    local settings
+    settings=$(get_tuzi_group_settings "$group")
+    local rest="${settings#*|}"
+    rest="${rest#*|}"
+    rest="${rest#*|}"
+    local group_label="${rest%%|*}"
+    local source_label=""
 
-        local already_selected=false
-        local model
-        for model in "${collected_models[@]}"; do
-            if [ "$model" = "$picked_model" ]; then
-                already_selected=true
-                break
-            fi
-        done
-
-        if [ "$already_selected" = true ]; then
-            log_warn "模型已添加: $picked_model"
+    if fetch_tuzi_models_with_cache "$group" "$api_key"; then
+        if [ "$TUZI_MODEL_FETCH_SOURCE" = "api" ]; then
+            log_info "已从 Tuzi 接口获取 ${#TUZI_AVAILABLE_MODELS[@]} 个模型"
+            source_label="实时拉取"
         else
-            collected_models+=("$picked_model")
-            log_info "已添加模型: $picked_model"
+            log_warn "${TUZI_MODEL_FETCH_ERROR:-实时拉取失败，已回退到本地缓存}"
+            if [ -n "$TUZI_MODEL_CACHE_TIMESTAMP" ]; then
+                log_info "已使用本地缓存模型列表（缓存时间: $TUZI_MODEL_CACHE_TIMESTAMP）"
+                source_label="本地缓存（$TUZI_MODEL_CACHE_TIMESTAMP）"
+            else
+                log_info "已使用本地缓存模型列表"
+                source_label="本地缓存"
+            fi
         fi
 
         echo ""
+        if choose_tuzi_models_interactive "$result_var" "$group_label" "$source_label"; then
+            return 0
+        fi
+    else
+        log_warn "${TUZI_MODEL_FETCH_ERROR:-无法获取模型列表}"
+        echo -e "${YELLOW}可能原因: API Key 无效、网络异常、接口权限不足，或当前 Key 没有可见模型${NC}"
+    fi
+
+    echo ""
+    if confirm "是否改为手动输入模型名称？" "y"; then
+        choose_tuzi_models_manually "$result_var"
+        return 0
+    fi
+
+    printf -v "$result_var" '%s' ""
+    return 1
+}
+
+TUZI_AVAILABLE_MODELS=()
+TUZI_MODEL_FETCH_SOURCE=""
+TUZI_MODEL_FETCH_ERROR=""
+TUZI_MODEL_CACHE_TIMESTAMP=""
+
+trim_whitespace() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+get_tuzi_model_cache_file() {
+    local group="$1"
+    printf '%s/tuzi-models-%s.json' "$TUZI_CACHE_DIR" "$group"
+}
+
+parse_tuzi_model_ids_from_json_file() {
+    local json_file="$1"
+    local output_file="$2"
+
+    if command -v python3 &> /dev/null; then
+        python3 - "$json_file" "$output_file" <<'PY'
+import json
+import sys
+
+json_file, output_file = sys.argv[1], sys.argv[2]
+with open(json_file, 'r', encoding='utf-8') as f:
+    payload = json.load(f)
+
+items = payload.get('data', payload)
+if not isinstance(items, list):
+    raise SystemExit(1)
+
+seen = set()
+models = []
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    model_id = item.get('id')
+    if not isinstance(model_id, str):
+        continue
+    model_id = model_id.strip()
+    if not model_id or model_id in seen:
+        continue
+    seen.add(model_id)
+    models.append(model_id)
+
+with open(output_file, 'w', encoding='utf-8') as f:
+    for model_id in models:
+        f.write(model_id + '\n')
+PY
+        return $?
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+const [jsonFile, outputFile] = process.argv.slice(1);
+const payload = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+const items = Array.isArray(payload?.data) ? payload.data : payload;
+if (!Array.isArray(items)) process.exit(1);
+const seen = new Set();
+const models = [];
+for (const item of items) {
+  const modelId = typeof item?.id === 'string' ? item.id.trim() : '';
+  if (!modelId || seen.has(modelId)) continue;
+  seen.add(modelId);
+  models.push(modelId);
+}
+fs.writeFileSync(outputFile, models.join('\n') + (models.length ? '\n' : ''));
+" "$json_file" "$output_file" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+extract_tuzi_error_message_from_json_file() {
+    local json_file="$1"
+
+    if command -v python3 &> /dev/null; then
+        python3 - "$json_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+except Exception:
+    print('')
+    raise SystemExit(0)
+
+message = ''
+if isinstance(payload, dict):
+    err = payload.get('error')
+    if isinstance(err, dict):
+        message = err.get('message') or err.get('type') or ''
+    if not message:
+        message = payload.get('message') or payload.get('detail') or ''
+
+print(message if isinstance(message, str) else '')
+PY
+        return 0
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+try {
+  const payload = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  let message = '';
+  if (payload && typeof payload === 'object') {
+    if (payload.error && typeof payload.error === 'object') {
+      message = payload.error.message || payload.error.type || '';
+    }
+    if (!message) message = payload.message || payload.detail || '';
+  }
+  console.log(typeof message === 'string' ? message : '');
+} catch (err) {
+  console.log('');
+}
+" "$json_file" 2>/dev/null
+        return 0
+    fi
+
+    printf '%s' ""
+}
+
+write_tuzi_model_cache_from_list() {
+    local group="$1"
+    local list_file="$2"
+    local cache_file
+    cache_file=$(get_tuzi_model_cache_file "$group")
+
+    mkdir -p "$TUZI_CACHE_DIR"
+
+    if command -v python3 &> /dev/null; then
+        python3 - "$group" "$list_file" "$cache_file" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+group, list_file, cache_file = sys.argv[1], sys.argv[2], sys.argv[3]
+models = []
+with open(list_file, 'r', encoding='utf-8') as f:
+    for line in f:
+        value = line.strip()
+        if value:
+            models.append(value)
+
+payload = {
+    'group': group,
+    'fetched_at': datetime.now(timezone.utc).isoformat(),
+    'models': models,
+}
+
+with open(cache_file, 'w', encoding='utf-8') as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2)
+PY
+        return $?
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+const [group, listFile, cacheFile] = process.argv.slice(1);
+const models = fs.readFileSync(listFile, 'utf8')
+  .split(/\r?\n/)
+  .map((item) => item.trim())
+  .filter(Boolean);
+fs.writeFileSync(cacheFile, JSON.stringify({
+  group,
+  fetched_at: new Date().toISOString(),
+  models,
+}, null, 2));
+" "$group" "$list_file" "$cache_file" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+read_tuzi_model_cache_to_list() {
+    local group="$1"
+    local output_file="$2"
+    local cache_file
+    cache_file=$(get_tuzi_model_cache_file "$group")
+
+    [ -f "$cache_file" ] || return 1
+
+    if command -v python3 &> /dev/null; then
+        python3 - "$cache_file" "$output_file" <<'PY'
+import json
+import sys
+
+cache_file, output_file = sys.argv[1], sys.argv[2]
+with open(cache_file, 'r', encoding='utf-8') as f:
+    payload = json.load(f)
+
+models = payload.get('models', [])
+if not isinstance(models, list):
+    raise SystemExit(1)
+
+seen = set()
+with open(output_file, 'w', encoding='utf-8') as f:
+    for item in models:
+        if not isinstance(item, str):
+            continue
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        f.write(value + '\n')
+PY
+        return $?
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+const [cacheFile, outputFile] = process.argv.slice(1);
+const payload = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+const models = Array.isArray(payload?.models) ? payload.models : null;
+if (!models) process.exit(1);
+const seen = new Set();
+const cleaned = [];
+for (const item of models) {
+  const value = typeof item === 'string' ? item.trim() : '';
+  if (!value || seen.has(value)) continue;
+  seen.add(value);
+  cleaned.push(value);
+}
+fs.writeFileSync(outputFile, cleaned.join('\n') + (cleaned.length ? '\n' : ''));
+" "$cache_file" "$output_file" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+get_tuzi_model_cache_timestamp() {
+    local group="$1"
+    local cache_file
+    cache_file=$(get_tuzi_model_cache_file "$group")
+
+    [ -f "$cache_file" ] || return 0
+
+    if command -v python3 &> /dev/null; then
+        python3 - "$cache_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+except Exception:
+    print('')
+    raise SystemExit(0)
+
+value = payload.get('fetched_at', '')
+print(value if isinstance(value, str) else '')
+PY
+        return 0
+    fi
+
+    if command -v node &> /dev/null; then
+        node -e "
+const fs = require('fs');
+try {
+  const payload = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  console.log(typeof payload?.fetched_at === 'string' ? payload.fetched_at : '');
+} catch (err) {
+  console.log('');
+}
+" "$cache_file" 2>/dev/null
+        return 0
+    fi
+
+    printf '%s' ""
+}
+
+load_tuzi_models_from_list_file() {
+    local list_file="$1"
+    TUZI_AVAILABLE_MODELS=()
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        TUZI_AVAILABLE_MODELS+=("$line")
+    done < "$list_file"
+}
+
+fetch_tuzi_models_with_cache() {
+    local group="$1"
+    local api_key="$2"
+    local tmp_response=""
+    local tmp_models=""
+    local curl_result=""
+
+    TUZI_AVAILABLE_MODELS=()
+    TUZI_MODEL_FETCH_SOURCE=""
+    TUZI_MODEL_FETCH_ERROR=""
+    TUZI_MODEL_CACHE_TIMESTAMP=""
+
+    tmp_response=$(mktemp)
+    tmp_models=$(mktemp)
+
+    if command -v curl &> /dev/null; then
+        curl_result=$(curl --connect-timeout 10 --max-time 30 -sS -o "$tmp_response" -w "%{http_code}" \
+            "https://api.tu-zi.com/v1/models" \
+            -H "Authorization: Bearer $api_key" 2>&1)
+        local curl_exit=$?
+
+        if [ $curl_exit -eq 0 ]; then
+            if [ "$curl_result" -ge 200 ] 2>/dev/null && [ "$curl_result" -lt 300 ] 2>/dev/null; then
+                if parse_tuzi_model_ids_from_json_file "$tmp_response" "$tmp_models"; then
+                    load_tuzi_models_from_list_file "$tmp_models"
+                    if [ ${#TUZI_AVAILABLE_MODELS[@]} -gt 0 ]; then
+                        write_tuzi_model_cache_from_list "$group" "$tmp_models" >/dev/null 2>&1 || true
+                        TUZI_MODEL_FETCH_SOURCE="api"
+                        rm -f "$tmp_response" "$tmp_models" 2>/dev/null
+                        return 0
+                    fi
+                    TUZI_MODEL_FETCH_ERROR="接口返回成功，但当前 Key 没有可见模型"
+                else
+                    TUZI_MODEL_FETCH_ERROR="模型列表解析失败"
+                fi
+            else
+                local error_message
+                error_message=$(extract_tuzi_error_message_from_json_file "$tmp_response")
+                if [ -n "$error_message" ]; then
+                    TUZI_MODEL_FETCH_ERROR="接口返回 HTTP $curl_result: $error_message"
+                else
+                    TUZI_MODEL_FETCH_ERROR="接口返回 HTTP $curl_result"
+                fi
+            fi
+        else
+            TUZI_MODEL_FETCH_ERROR="请求模型列表失败: $curl_result"
+        fi
+    else
+        TUZI_MODEL_FETCH_ERROR="当前环境缺少 curl，无法拉取模型列表"
+    fi
+
+    if read_tuzi_model_cache_to_list "$group" "$tmp_models"; then
+        load_tuzi_models_from_list_file "$tmp_models"
+        if [ ${#TUZI_AVAILABLE_MODELS[@]} -gt 0 ]; then
+            TUZI_MODEL_FETCH_SOURCE="cache"
+            TUZI_MODEL_CACHE_TIMESTAMP=$(get_tuzi_model_cache_timestamp "$group")
+            rm -f "$tmp_response" "$tmp_models" 2>/dev/null
+            return 0
+        fi
+    fi
+
+    rm -f "$tmp_response" "$tmp_models" 2>/dev/null
+    return 1
+}
+
+normalize_tuzi_model_csv() {
+    local raw_csv="$1"
+    local result_var="$2"
+    local normalized_models=()
+    local raw_items=()
+    local item=""
+
+    IFS=',' read -r -a raw_items <<< "$raw_csv"
+    for item in "${raw_items[@]}"; do
+        local cleaned
+        cleaned=$(trim_whitespace "$item")
+        [ -n "$cleaned" ] || continue
+
+        local exists=false
+        local current=""
+        for current in "${normalized_models[@]}"; do
+            if [ "$current" = "$cleaned" ]; then
+                exists=true
+                break
+            fi
+        done
+        [ "$exists" = true ] || normalized_models+=("$cleaned")
     done
 
-    local joined_models=""
+    local joined=""
     local idx
-    for idx in "${!collected_models[@]}"; do
-        if [ -n "$joined_models" ]; then
-            joined_models="${joined_models},${collected_models[$idx]}"
+    for idx in "${!normalized_models[@]}"; do
+        if [ -n "$joined" ]; then
+            joined="${joined},${normalized_models[$idx]}"
         else
-            joined_models="${collected_models[$idx]}"
+            joined="${normalized_models[$idx]}"
         fi
     done
 
-    printf -v "$result_var" '%s' "$joined_models"
+    printf -v "$result_var" '%s' "$joined"
+}
+
+choose_tuzi_models_manually() {
+    local result_var="$1"
+    local manual_input=""
+    local normalized=""
+
+    while true; do
+        read_nonempty_value "${YELLOW}手动输入模型名称，多个模型请用英文逗号分隔: ${NC}" manual_input
+        normalize_tuzi_model_csv "$manual_input" normalized
+        if [ -n "$normalized" ]; then
+            printf -v "$result_var" '%s' "$normalized"
+            return 0
+        fi
+        log_error "请输入至少一个有效的模型名称"
+    done
+}
+
+choose_tuzi_models_interactive() {
+    local result_var="$1"
+    local group_label="$2"
+    local source_label="$3"
+    local cursor=0
+    local window_size=15
+    local total=${#TUZI_AVAILABLE_MODELS[@]}
+    local selected_flags=()
+    local selected_models=()
+    local key=""
+
+    [ "$total" -gt 0 ] || return 1
+
+    while true; do
+        clear
+        echo -e "${WHITE}选择要接入的 ${group_label} 模型${NC}"
+        print_divider
+        echo -e "${GRAY}使用 ↑/↓ 移动，空格勾选，回车确认，q 退出${NC}"
+        echo -e "${GRAY}主模型将按勾选顺序取第一个，其余模型会写入 fallback${NC}"
+        if [ -n "$source_label" ]; then
+            echo -e "${CYAN}模型来源:${NC} $source_label"
+        fi
+        echo -e "${CYAN}已选数量:${NC} ${#selected_models[@]} / $total"
+        echo ""
+
+        local start=0
+        if [ "$total" -gt "$window_size" ] && [ "$cursor" -ge $((window_size / 2)) ]; then
+            start=$((cursor - window_size / 2))
+            if [ $((start + window_size)) -gt "$total" ]; then
+                start=$((total - window_size))
+            fi
+        fi
+        local end=$((start + window_size))
+        [ "$end" -gt "$total" ] && end="$total"
+
+        local i
+        for ((i = start; i < end; i++)); do
+            local checked="[ ]"
+            [ "${selected_flags[$i]}" = "1" ] && checked="[x]"
+
+            local order_tag=""
+            if [ "${selected_flags[$i]}" = "1" ]; then
+                local order=1
+                local selected_model=""
+                for selected_model in "${selected_models[@]}"; do
+                    if [ "$selected_model" = "${TUZI_AVAILABLE_MODELS[$i]}" ]; then
+                        order_tag=" (${order})"
+                        break
+                    fi
+                    order=$((order + 1))
+                done
+            fi
+
+            if [ "$i" -eq "$cursor" ]; then
+                echo -e "${CYAN}>${NC} ${checked} ${WHITE}${TUZI_AVAILABLE_MODELS[$i]}${NC}${GRAY}${order_tag}${NC}"
+            else
+                echo -e "  ${checked} ${TUZI_AVAILABLE_MODELS[$i]}${GRAY}${order_tag}${NC}"
+            fi
+        done
+
+        if [ "$total" -gt "$window_size" ]; then
+            echo ""
+            echo -e "${GRAY}显示 $((start + 1))-${end} / ${total}${NC}"
+        fi
+
+        IFS= read -r -s -n 1 key < "$TTY_INPUT"
+        case "$key" in
+            "")
+                if [ ${#selected_models[@]} -gt 0 ]; then
+                    local selected_csv=""
+                    local idx
+                    for idx in "${!selected_models[@]}"; do
+                        if [ -n "$selected_csv" ]; then
+                            selected_csv="${selected_csv},${selected_models[$idx]}"
+                        else
+                            selected_csv="${selected_models[$idx]}"
+                        fi
+                    done
+                    printf -v "$result_var" '%s' "$selected_csv"
+                    clear
+                    return 0
+                fi
+                ;;
+            " ")
+                if [ "${selected_flags[$cursor]}" = "1" ]; then
+                    selected_flags[$cursor]=0
+                    local updated_selection=()
+                    local selected_model=""
+                    for selected_model in "${selected_models[@]}"; do
+                        if [ "$selected_model" != "${TUZI_AVAILABLE_MODELS[$cursor]}" ]; then
+                            updated_selection+=("$selected_model")
+                        fi
+                    done
+                    selected_models=("${updated_selection[@]}")
+                else
+                    selected_flags[$cursor]=1
+                    selected_models+=("${TUZI_AVAILABLE_MODELS[$cursor]}")
+                fi
+                ;;
+            [qQ])
+                safe_exit
+                ;;
+            j)
+                if [ "$cursor" -lt $((total - 1)) ]; then
+                    cursor=$((cursor + 1))
+                fi
+                ;;
+            k)
+                if [ "$cursor" -gt 0 ]; then
+                    cursor=$((cursor - 1))
+                fi
+                ;;
+            $'\x1b')
+                IFS= read -r -s -n 1 key < "$TTY_INPUT"
+                if [ "$key" = "[" ]; then
+                    IFS= read -r -s -n 1 key < "$TTY_INPUT"
+                    case "$key" in
+                        A)
+                            if [ "$cursor" -gt 0 ]; then
+                                cursor=$((cursor - 1))
+                            fi
+                            ;;
+                        B)
+                            if [ "$cursor" -lt $((total - 1)) ]; then
+                                cursor=$((cursor + 1))
+                            fi
+                            ;;
+                    esac
+                fi
+                ;;
+        esac
+    done
 }
 
 write_tuzi_env_file() {
@@ -1659,7 +2199,7 @@ config_tuzi() {
     if [ -n "$current_models" ]; then
         echo -e "${GRAY}当前已选模型: $current_models${NC}"
     fi
-    choose_tuzi_models "$group" selected_models
+    choose_tuzi_models "$group" "$api_key" selected_models
 
     if [ -z "$selected_models" ]; then
         log_error "模型名称不能为空"

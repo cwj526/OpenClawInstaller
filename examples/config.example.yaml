@@ -36,7 +36,7 @@ llm:
       group: Codex
       api_key: "sk-your-codex-key"
       base_url: "https://api.tu-zi.com/v1"
-      api_type: "openai-responses"
+      api_type: "openai-completions"
       model: "gpt-5.4"
       models: "gpt-5.4,gpt-5.2-high"
 
