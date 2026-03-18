@@ -129,6 +129,17 @@ bash ~/.openclaw/config-menu.sh
 curl -fsSL https://raw.githubusercontent.com/cwj526/OpenClawInstaller/main/config-menu.sh -o ~/.openclaw/config-menu.sh && bash ~/.openclaw/config-menu.sh
 ```
 
+#### 可选：安装 `tuzi-skills`
+
+在 Tuzi API 配置完成后，安装器会介绍并询问你是否一键安装 [`tuziapi/tuzi-skills`](https://github.com/tuziapi/tuzi-skills)。这个 skills 集适合补充内容生成、内容处理和常用工具能力。
+
+```bash
+# 一键安装命令
+npx skills add tuziapi/tuzi-skills --agent openclaw --yes
+```
+
+安装后可以直接告诉 Agent：`请帮我用 tuzi-skills 生成内容或图片`。详情请查看：[tuziapi/tuzi-skills](https://github.com/tuziapi/tuzi-skills)。
+
 ## ✨ 功能特性
 
 ### 🤖 Tuzi API 快速接入
@@ -522,7 +533,7 @@ rm -rf ~/.openclaw
 
 - [OpenClaw 官网](https://clawd.bot)
 - [官方文档](https://clawd.bot/docs)
-- [🖥️ OpenClaw Manager 桌面版](https://github.com/miaoxworld/openclaw-manager) - 图形界面管理工具
+- [🖥️ OpenClaw Manager 桌面版](https://github.com/cwj526/openclaw-manager) - 图形界面管理工具
 - [安装工具仓库](https://github.com/cwj526/OpenClawInstaller) - 命令行版本
 - [OpenClaw 主仓库](https://github.com/openclaw/openclaw)
 - [社区讨论](https://github.com/cwj526/OpenClawInstaller/discussions)
