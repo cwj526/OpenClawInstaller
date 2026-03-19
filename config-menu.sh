@@ -145,6 +145,136 @@ PY
     "$@"
 }
 
+filter_openclaw_test_output() {
+    echo "$1" | grep -v "ExperimentalWarning" \
+        | grep -v "at emitExperimentalWarning" \
+        | grep -v "at ModuleLoader" \
+        | grep -v "at callTranslator" \
+        | grep -v "Cannot read properties of undefined" \
+        | grep -v "TypeError:" \
+        | grep -v "ReferenceError:" \
+        | grep -v "\[plugins\]" \
+        | grep -v "Doctor warnings" \
+        | grep -v "Registered.*tools" \
+        | grep -v "State dir migration" \
+        | grep -v "\[skills\] Skipping skill path that resolves outside its configured root\." \
+        | grep -v "^│" \
+        | grep -v "^◇"
+}
+
+extract_openclaw_test_error() {
+    local output="$1"
+    echo "$output" | grep -iE "HTTP 401|HTTP 403|authentication_error|authentication failed|Invalid bearer token|Incorrect API|Unknown model|API key|超时" | head -5
+}
+
+get_expected_tuzi_provider_prefix() {
+    local tuzi_group="$1"
+    case "$tuzi_group" in
+        codex) printf '%s' "tuzi-codex" ;;
+        claude-code) printf '%s' "tuzi-claude-code" ;;
+        *) printf '%s' "" ;;
+    esac
+}
+
+get_openclaw_default_model_from_status() {
+    local status_output="$1"
+    echo "$status_output" | sed -n 's/^Default[[:space:]]*:[[:space:]]*//p' | head -1
+}
+
+get_expected_tuzi_group_for_test() {
+    local provider="$1"
+    local model="$2"
+    local codex_model
+    local claude_model
+
+    if [ "$provider" != "tuzi" ]; then
+        printf '%s' ""
+        return 0
+    fi
+
+    codex_model=$(get_env_value "TUZI_CODEX_MODEL")
+    claude_model=$(get_env_value "TUZI_CLAUDE_CODE_MODEL")
+
+    if [ -n "$codex_model" ] && [ "$codex_model" = "$model" ]; then
+        printf '%s' "codex"
+    elif [ -n "$claude_model" ] && [ "$claude_model" = "$model" ]; then
+        printf '%s' "claude-code"
+    else
+        printf '%s' "claude-code"
+    fi
+}
+
+run_openclaw_precheck() {
+    local expected_tuzi_group="$1"
+    local expected_prefix
+    local status_output=""
+    local doctor_output=""
+    local doctor_exit=0
+    local combined_output=""
+    local current_default=""
+    local blockers=""
+    local warnings=""
+    local status_summary=""
+
+    expected_prefix=$(get_expected_tuzi_provider_prefix "$expected_tuzi_group")
+
+    set +e
+    status_output=$(run_with_timeout 15 openclaw models status 2>&1)
+    local status_exit=$?
+    doctor_output=$(run_with_timeout 12 openclaw doctor 2>&1)
+    doctor_exit=$?
+    set -e
+
+    combined_output="${status_output}"$'\n'"${doctor_output}"
+    current_default=$(get_openclaw_primary_model)
+    if [ -z "$current_default" ]; then
+        current_default=$(get_openclaw_default_model_from_status "$status_output")
+    fi
+
+    status_summary=$(printf '%s\n' "$status_output" \
+        | grep -E "^Default|^Auth store|^Shell env|^Providers w/ OAuth/tokens|^- " \
+        | head -8)
+
+    if [ $status_exit -ne 0 ] && [ $status_exit -ne 124 ]; then
+        blockers="${blockers}${blockers:+$'\n'}无法读取 openclaw models status，请检查 OpenClaw 安装或配置。"
+    fi
+
+    if echo "$combined_output" | grep -qiE "Token refresh failed|401|403|authentication_error|authentication failed|Invalid bearer token"; then
+        blockers="${blockers}${blockers:+$'\n'}检测到鉴权失败或 token 已失效，请重新配置对应 Provider 的凭据。"
+    fi
+
+    if echo "$combined_output" | grep -qi "Unknown model"; then
+        blockers="${blockers}${blockers:+$'\n'}检测到模型配置错误，OpenClaw 当前无法识别所选模型。"
+    fi
+
+    if [ -n "$expected_prefix" ] && [ -n "$current_default" ] && [[ "$current_default" != "$expected_prefix/"* ]]; then
+        blockers="${blockers}${blockers:+$'\n'}默认模型仍是 $(sanitize_model_display "$current_default")，预期应切换到 ${expected_prefix}/...。"
+    fi
+
+    if echo "$combined_output" | grep -q "plugins.allow is empty"; then
+        warnings="${warnings}${warnings:+$'\n'}检测到插件自动加载提示，可稍后通过 plugins.allow 显式收敛。"
+    fi
+
+    if echo "$combined_output" | grep -q "\[skills\] Skipping skill path that resolves outside its configured root\."; then
+        warnings="${warnings}${warnings:+$'\n'}检测到 skills 根目录外的符号链接告警，不影响本次 AI 联通性判断。"
+    fi
+
+    if echo "$doctor_output" | grep -q "gateway.mode is unset"; then
+        warnings="${warnings}${warnings:+$'\n'}doctor 提示 gateway.mode 未设置，但这不阻止本次 local agent 实测。"
+    fi
+
+    if [ $doctor_exit -eq 124 ]; then
+        warnings="${warnings}${warnings:+$'\n'}openclaw doctor 超时，已按当前输出继续预检。"
+    fi
+
+    OPENCLAW_PRECHECK_DEFAULT_MODEL="$current_default"
+    OPENCLAW_PRECHECK_STATUS_SUMMARY="$status_summary"
+    OPENCLAW_PRECHECK_BLOCKERS="$blockers"
+    OPENCLAW_PRECHECK_WARNINGS="$warnings"
+    OPENCLAW_PRECHECK_STATUS_OUTPUT="$status_output"
+    OPENCLAW_PRECHECK_DOCTOR_OUTPUT="$doctor_output"
+}
+
 print_exit_hint() {
     echo -e "${GRAY}输入 q 可安全退出脚本${NC}"
 }
@@ -1573,6 +1703,7 @@ test_ai_connection() {
     local api_key=$2
     local model=$3
     local base_url=$4
+    local expected_tuzi_group=""
     
     echo ""
     echo -e "${CYAN}━━━ 测试 AI 配置 ━━━${NC}"
@@ -1585,13 +1716,48 @@ test_ai_connection() {
     
     # 确保环境变量已加载
     [ -f "$OPENCLAW_ENV" ] && source "$OPENCLAW_ENV"
-    
-    # 显示当前模型配置
-    echo -e "${CYAN}当前模型配置:${NC}"
-    openclaw models status 2>&1 | grep -E "Default|Auth|effective" | head -5
+
+    expected_tuzi_group=$(get_expected_tuzi_group_for_test "$provider" "$model")
+    run_openclaw_precheck "$expected_tuzi_group"
+
+    echo -e "${CYAN}预检结果:${NC}"
+    if [ -n "$OPENCLAW_PRECHECK_STATUS_SUMMARY" ]; then
+        echo "$OPENCLAW_PRECHECK_STATUS_SUMMARY" | sed 's/^/  /'
+    elif [ -n "$OPENCLAW_PRECHECK_DEFAULT_MODEL" ]; then
+        echo "  Default       : $(sanitize_model_display "$OPENCLAW_PRECHECK_DEFAULT_MODEL")"
+    fi
     echo ""
-    
-    # 使用 openclaw agent --local 测试
+
+    if [ -n "$OPENCLAW_PRECHECK_BLOCKERS" ]; then
+        echo -e "${RED}阻断问题:${NC}"
+        echo "$OPENCLAW_PRECHECK_BLOCKERS" | sed 's/^/  - /'
+        echo ""
+        echo -e "${YELLOW}提示:${NC}"
+        echo "  建议先修复鉴权或默认模型问题，再执行 agent 实测。"
+        echo ""
+        if ! confirm "预检发现阻断问题，是否仍继续执行 openclaw agent --local 实测？" "n"; then
+            echo -e "${YELLOW}已按你的选择跳过 agent 实测。${NC}"
+            return 0
+        fi
+    else
+        if [ -n "$OPENCLAW_PRECHECK_WARNINGS" ]; then
+            echo -e "${YELLOW}告警:${NC}"
+            echo "$OPENCLAW_PRECHECK_WARNINGS" | sed 's/^/  - /'
+            echo ""
+            if ! confirm "预检存在告警，是否继续执行 openclaw agent --local 实测？" "n"; then
+                echo -e "${YELLOW}已按你的选择跳过 agent 实测。${NC}"
+                return 0
+            fi
+        else
+            echo -e "${GREEN}✓ 预检通过${NC}"
+            echo ""
+            if ! confirm "是否继续执行 openclaw agent --local 实测？" "y"; then
+                echo -e "${YELLOW}已按你的选择跳过 agent 实测。${NC}"
+                return 0
+            fi
+        fi
+    fi
+
     echo -e "${YELLOW}运行 openclaw agent --local 测试...${NC}"
     echo ""
     
@@ -1604,16 +1770,29 @@ test_ai_connection() {
     if [ "$exit_code" = "124" ] && [ -z "$result" ]; then
         result="测试超时（30秒）"
     fi
-    
-    # 过滤掉 Node.js 警告信息和 JavaScript 错误
-    result=$(echo "$result" | grep -v "ExperimentalWarning" | grep -v "at emitExperimentalWarning" | grep -v "at ModuleLoader" | grep -v "at callTranslator" | grep -v "Cannot read properties of undefined" | grep -v "TypeError:" | grep -v "ReferenceError:")
+
+    local raw_result="$result"
+    result=$(filter_openclaw_test_output "$result")
+
+    if [ "$exit_code" = "124" ]; then
+        local inferred_error
+        inferred_error=$(extract_openclaw_test_error "$raw_result")
+        if [ -n "$inferred_error" ]; then
+            result="$inferred_error"
+            exit_code=1
+        elif [ -n "$result" ]; then
+            exit_code=1
+        else
+            result="测试超时（30秒）"
+        fi
+    fi
     
     echo ""
     if [ $exit_code -eq 0 ] && ! echo "$result" | grep -qiE "error|failed|401|403|Unknown model"; then
         log_info "OpenClaw AI 测试成功！"
         echo ""
         # 显示 AI 响应（过滤掉空行和无关内容）
-        local ai_response=$(echo "$result" | grep -v "^$" | grep -v "^\[" | grep -v "^{" | head -5)
+        local ai_response=$(echo "$result" | grep -v "^$" | grep -v "^{" | head -5)
         if [ -n "$ai_response" ]; then
             echo -e "  ${CYAN}AI 响应:${NC}"
             echo "$ai_response" | sed 's/^/    /'
