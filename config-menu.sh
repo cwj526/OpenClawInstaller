@@ -646,6 +646,15 @@ trim_whitespace() {
     printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+normalize_tuzi_model_token() {
+    local value
+    value=$(trim_whitespace "$1")
+    while [ -n "$value" ] && [[ "$value" =~ [\\/]+$ ]]; do
+        value="${value%?}"
+    done
+    printf '%s' "$value"
+}
+
 get_tuzi_model_cache_file() {
     local group="$1"
     printf '%s/tuzi-models-%s.json' "$TUZI_CACHE_DIR" "$group"
@@ -1001,7 +1010,7 @@ normalize_tuzi_model_csv() {
     IFS=',' read -r -a raw_items <<< "$raw_csv"
     for item in "${raw_items[@]}"; do
         local cleaned
-        cleaned=$(trim_whitespace "$item")
+        cleaned=$(normalize_tuzi_model_token "$item")
         [ -n "$cleaned" ] || continue
 
         local exists=false
@@ -1271,10 +1280,28 @@ config.auth.profiles[vars.provider_id + ':default'] = {
 
 config.models ??= {};
 config.models.providers ??= {};
-const modelIds = (vars.models_csv || vars.primary_model)
+const normalizeModelToken = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/[\\/]+$/g, '');
+};
+const normalizeModelRef = (value) => {
+  const cleaned = normalizeModelToken(value);
+  const parts = cleaned.split('/');
+  if (parts.length < 2) return cleaned;
+  const providerId = parts.shift();
+  const modelId = normalizeModelToken(parts.join('/'));
+  return providerId && modelId ? providerId + '/' + modelId : '';
+};
+const rawModelIds = (vars.models_csv || vars.primary_model)
   .split(',')
-  .map((item) => item.trim())
+  .map((item) => normalizeModelToken(item))
   .filter(Boolean);
+const seenModelIds = new Set();
+const modelIds = rawModelIds.filter((modelId) => {
+  if (seenModelIds.has(modelId)) return false;
+  seenModelIds.add(modelId);
+  return true;
+});
 const providerModels = modelIds.map((modelId) => ({
   id: modelId,
   name: modelId,
@@ -1293,14 +1320,37 @@ config.models.providers[vars.provider_id] = {
 
 config.agents ??= {};
 config.agents.defaults ??= {};
-const fallbackModels = modelIds.slice(1).map((modelId) => vars.provider_id + '/' + modelId);
-config.agents.defaults.models ??= {};
+const normalizedDefaultsModels = {};
+Object.keys(config.agents.defaults.models || {}).forEach((modelRef) => {
+  const normalizedRef = normalizeModelRef(modelRef);
+  if (normalizedRef) normalizedDefaultsModels[normalizedRef] = {};
+});
+config.agents.defaults.models = normalizedDefaultsModels;
 modelIds.forEach((modelId) => {
-  config.agents.defaults.models[vars.provider_id + '/' + modelId] = {};
+  const modelRef = normalizeModelRef(vars.provider_id + '/' + modelId);
+  if (modelRef) config.agents.defaults.models[modelRef] = {};
 });
 if (vars.update_default || !config.agents.defaults.model?.primary) {
+  const primaryRef = normalizeModelRef(vars.provider_id + '/' + vars.primary_model);
+  const fallbackModels = [];
+  const seenFallbacks = new Set();
+  const addFallback = (modelRef) => {
+    const normalizedRef = normalizeModelRef(modelRef);
+    if (!normalizedRef || normalizedRef === primaryRef || seenFallbacks.has(normalizedRef)) return;
+    seenFallbacks.add(normalizedRef);
+    fallbackModels.push(normalizedRef);
+  };
+
+  modelIds.slice(1).forEach((modelId) => {
+    addFallback(vars.provider_id + '/' + modelId);
+  });
+
+  Object.keys(config.agents.defaults.models).forEach((modelRef) => {
+    addFallback(modelRef);
+  });
+
   config.agents.defaults.model = {
-    primary: vars.provider_id + '/' + vars.primary_model,
+    primary: primaryRef,
     fallbacks: fallbackModels
   };
 }
@@ -1351,7 +1401,30 @@ config.setdefault('auth', {}).setdefault('profiles', {})[vars['provider_id'] + '
     'mode': 'api_key'
 }
 
-model_ids = [item.strip() for item in (vars.get('models_csv') or vars['primary_model']).split(',') if item.strip()]
+def normalize_model_token(value):
+    if not isinstance(value, str):
+        return ''
+    return value.strip().rstrip('/\\')
+
+def normalize_model_ref(value):
+    cleaned = normalize_model_token(value)
+    if '/' not in cleaned:
+        return cleaned
+    provider_id, model_id = cleaned.split('/', 1)
+    provider_id = provider_id.strip()
+    model_id = normalize_model_token(model_id)
+    if not provider_id or not model_id:
+        return ''
+    return f'{provider_id}/{model_id}'
+
+raw_model_ids = [normalize_model_token(item) for item in (vars.get('models_csv') or vars['primary_model']).split(',')]
+model_ids = []
+seen_model_ids = set()
+for model_id in raw_model_ids:
+    if not model_id or model_id in seen_model_ids:
+        continue
+    seen_model_ids.add(model_id)
+    model_ids.append(model_id)
 provider_models = [{
     'id': model_id,
     'name': model_id,
@@ -1370,13 +1443,37 @@ config.setdefault('models', {}).setdefault('providers', {})[vars['provider_id']]
 }
 
 defaults = config.setdefault('agents', {}).setdefault('defaults', {})
-defaults.setdefault('models', {})
+normalized_defaults_models = {}
+for model_ref in defaults.get('models', {}).keys():
+    normalized_ref = normalize_model_ref(model_ref)
+    if normalized_ref:
+        normalized_defaults_models[normalized_ref] = {}
+defaults['models'] = normalized_defaults_models
 for model_id in model_ids:
-    defaults['models'][f\"{vars['provider_id']}/{model_id}\"] = {}
+    normalized_ref = normalize_model_ref(f\"{vars['provider_id']}/{model_id}\")
+    if normalized_ref:
+        defaults['models'][normalized_ref] = {}
 if vars.get('update_default') or not defaults.get('model', {}).get('primary'):
+    primary_ref = normalize_model_ref(f\"{vars['provider_id']}/{vars['primary_model']}\")
+    fallback_models = []
+    seen_fallbacks = set()
+
+    def add_fallback(model_ref):
+        normalized_ref = normalize_model_ref(model_ref)
+        if not normalized_ref or normalized_ref == primary_ref or normalized_ref in seen_fallbacks:
+            return
+        seen_fallbacks.add(normalized_ref)
+        fallback_models.append(normalized_ref)
+
+    for model_id in model_ids[1:]:
+        add_fallback(f\"{vars['provider_id']}/{model_id}\")
+
+    for model_ref in defaults.get('models', {}).keys():
+        add_fallback(model_ref)
+
     defaults['model'] = {
-        'primary': f\"{vars['provider_id']}/{vars['primary_model']}\",
-        'fallbacks': [f\"{vars['provider_id']}/{model_id}\" for model_id in model_ids[1:]]
+        'primary': primary_ref,
+        'fallbacks': fallback_models
     }
 
 with open(vars['config_file'], 'w') as f:
