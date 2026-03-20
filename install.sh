@@ -153,7 +153,35 @@ get_expected_tuzi_provider_prefix() {
     case "$tuzi_group" in
         codex) printf '%s' "tuzi-codex" ;;
         claude-code) printf '%s' "tuzi-claude-code" ;;
+        gaccode) printf '%s' "gac" ;;
         *) printf '%s' "" ;;
+    esac
+}
+
+get_expected_tuzi_provider_hint() {
+    local tuzi_group="$1"
+    case "$tuzi_group" in
+        gaccode) printf '%s' "gac-claude/... 或 gac-codex/..." ;;
+        *)
+            local prefix
+            prefix=$(get_expected_tuzi_provider_prefix "$tuzi_group")
+            [ -n "$prefix" ] && printf '%s' "${prefix}/..."
+            ;;
+    esac
+}
+
+is_expected_tuzi_model_ref() {
+    local tuzi_group="$1"
+    local model_ref="$2"
+    case "$tuzi_group" in
+        gaccode)
+            [[ "$model_ref" == gac-claude/* || "$model_ref" == gac-codex/* ]]
+            ;;
+        *)
+            local prefix
+            prefix=$(get_expected_tuzi_provider_prefix "$tuzi_group")
+            [ -n "$prefix" ] && [[ "$model_ref" == "$prefix/"* ]]
+            ;;
     esac
 }
 
@@ -205,8 +233,8 @@ run_openclaw_precheck() {
         blockers="${blockers}${blockers:+$'\n'}检测到模型配置错误，OpenClaw 当前无法识别所选模型。"
     fi
 
-    if [ -n "$expected_prefix" ] && [ -n "$current_default" ] && [[ "$current_default" != "$expected_prefix/"* ]]; then
-        blockers="${blockers}${blockers:+$'\n'}默认模型仍是 $(sanitize_model_display "$current_default")，预期应切换到 ${expected_prefix}/...。"
+    if [ -n "$expected_prefix" ] && [ -n "$current_default" ] && ! is_expected_tuzi_model_ref "$expected_tuzi_group" "$current_default"; then
+        blockers="${blockers}${blockers:+$'\n'}默认模型仍是 $(sanitize_model_display "$current_default")，预期应切换到 $(get_expected_tuzi_provider_hint "$expected_tuzi_group")。"
     fi
 
     if echo "$combined_output" | grep -q "plugins.allow is empty"; then
@@ -330,6 +358,7 @@ get_tuzi_group_from_model_ref() {
     case "$model_ref" in
         tuzi-codex/*) printf '%s' "codex" ;;
         tuzi-claude-code/*) printf '%s' "claude-code" ;;
+        gac-claude/*|gac-codex/*) printf '%s' "gaccode" ;;
         *) printf '%s' "" ;;
     esac
 }
@@ -641,6 +670,16 @@ is_tuzi_group_complete() {
     local model_var=""
 
     case "$group" in
+        gaccode)
+            local gac_key
+            local gac_claude_model
+            local gac_codex_model
+            gac_key=$(get_env_file_value "$env_file" "GACCODE_API_KEY")
+            gac_claude_model=$(get_env_file_value "$env_file" "GAC_CLAUDE_MODEL")
+            gac_codex_model=$(get_env_file_value "$env_file" "GAC_CODEX_MODEL")
+            [ -n "$gac_key" ] && [ -n "$gac_claude_model" ] && [ -n "$gac_codex_model" ]
+            return
+            ;;
         codex)
             key_var="TUZI_CODEX_API_KEY"
             model_var="TUZI_CODEX_MODEL"
@@ -666,7 +705,7 @@ is_tuzi_configured() {
         return 1
     fi
 
-    if is_tuzi_group_complete "claude-code" || is_tuzi_group_complete "codex"; then
+    if is_tuzi_group_complete "claude-code" || is_tuzi_group_complete "codex" || is_tuzi_group_complete "gaccode"; then
         return 0
     fi
 
@@ -689,6 +728,11 @@ show_current_tuzi_config() {
     local codex_key
     local codex_model
     local codex_models
+    local gac_key
+    local gac_claude_model
+    local gac_claude_models
+    local gac_codex_model
+    local gac_codex_models
 
     current_model_ref=$(get_openclaw_primary_model_file "$openclaw_json")
     current_group=$(get_tuzi_group_from_model_ref "$current_model_ref")
@@ -698,6 +742,11 @@ show_current_tuzi_config() {
     codex_key=$(get_env_file_value "$env_file" "TUZI_CODEX_API_KEY")
     codex_model=$(get_env_file_value "$env_file" "TUZI_CODEX_MODEL")
     codex_models=$(get_env_file_value "$env_file" "TUZI_CODEX_MODELS")
+    gac_key=$(get_env_file_value "$env_file" "GACCODE_API_KEY")
+    gac_claude_model=$(get_env_file_value "$env_file" "GAC_CLAUDE_MODEL")
+    gac_claude_models=$(get_env_file_value "$env_file" "GAC_CLAUDE_MODELS")
+    gac_codex_model=$(get_env_file_value "$env_file" "GAC_CODEX_MODEL")
+    gac_codex_models=$(get_env_file_value "$env_file" "GAC_CODEX_MODELS")
 
     echo -e "${CYAN}当前 Tuzi 配置:${NC}"
     if [ -n "$current_group" ]; then
@@ -723,6 +772,17 @@ show_current_tuzi_config() {
         echo -e "  Codex: ${YELLOW}未完成配置${NC}"
     else
         echo -e "  Codex: ${GRAY}(未配置)${NC}"
+    fi
+    if [ -n "$gac_key" ] && [ -n "$gac_claude_model" ] && [ -n "$gac_codex_model" ]; then
+        echo -e "  GACCode: ${GREEN}已配置${NC}"
+        echo -e "    GAC Claude 主模型: ${WHITE}$gac_claude_model${NC}"
+        [ -n "$gac_claude_models" ] && echo -e "    GAC Claude 模型: ${WHITE}$gac_claude_models${NC}"
+        echo -e "    GAC Codex 主模型: ${WHITE}$gac_codex_model${NC}"
+        [ -n "$gac_codex_models" ] && echo -e "    GAC Codex 模型: ${WHITE}$gac_codex_models${NC}"
+    elif [ -n "$gac_key" ]; then
+        echo -e "  GACCode: ${YELLOW}未完成配置${NC}"
+    else
+        echo -e "  GACCode: ${GRAY}(未配置)${NC}"
     fi
 }
 
@@ -998,10 +1058,32 @@ get_tuzi_group_settings() {
         codex)
             echo "tuzi-codex|https://api.tu-zi.com/v1|openai-completions|Codex|TUZI_CODEX"
             ;;
+        gac-claude|gaccode)
+            echo "gac-claude|https://gaccode.com/claudecode|anthropic-messages|GAC Claude|GAC_CLAUDE"
+            ;;
+        gac-codex)
+            echo "gac-codex|https://gaccode.com/codex/v1|openai-completions|GAC Codex|GAC_CODEX"
+            ;;
         *)
             echo "tuzi-claude-code|https://api.tu-zi.com|anthropic-messages|Claude-Code|TUZI_CLAUDE_CODE"
             ;;
     esac
+}
+
+get_gac_claude_primary_model() {
+    printf '%s' "claude-opus-4-6"
+}
+
+get_gac_claude_models_csv() {
+    printf '%s' "claude-opus-4-6,claude-sonnet-4-6,claude-haiku-4-5-20251001"
+}
+
+get_gac_codex_primary_model() {
+    printf '%s' "gpt-5.4"
+}
+
+get_gac_codex_models_csv() {
+    printf '%s' "gpt-5.4"
 }
 
 choose_tuzi_model() {
@@ -1665,6 +1747,11 @@ configure_tuzi_provider() {
     rest="${rest#*|}"
     local api_type="${rest%%|*}"
 
+    if [ "$group" = "gaccode" ]; then
+        configure_gaccode_providers "$api_key" "$config_file" "$update_default"
+        return $?
+    fi
+
     local config_success=false
 
     if command -v node &> /dev/null; then
@@ -1897,6 +1984,256 @@ with open(vars['config_file'], 'w') as f:
     return 0
 }
 
+configure_gaccode_providers() {
+    local api_key="$1"
+    local config_file="$2"
+    local update_default="${3:-false}"
+
+    if [ -z "$api_key" ] || [ -z "$config_file" ]; then
+        log_error "GACCode 配置参数不完整"
+        return 1
+    fi
+
+    local config_success=false
+    local gac_claude_primary
+    local gac_claude_models
+    local gac_codex_primary
+    local gac_codex_models
+    gac_claude_primary=$(get_gac_claude_primary_model)
+    gac_claude_models=$(get_gac_claude_models_csv)
+    gac_codex_primary=$(get_gac_codex_primary_model)
+    gac_codex_models=$(get_gac_codex_models_csv)
+
+    if command -v node &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_gaccode_install_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "api_key": "$api_key",
+  "update_default": $update_default,
+  "gac_claude_primary": "$gac_claude_primary",
+  "gac_claude_models": "$gac_claude_models",
+  "gac_codex_primary": "$gac_codex_primary",
+  "gac_codex_models": "$gac_codex_models"
+}
+EOFVARS
+        node -e "
+const fs = require('fs');
+const vars = JSON.parse(fs.readFileSync('$tmp_vars', 'utf8'));
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(vars.config_file, 'utf8'));
+} catch (e) {
+  config = {};
+}
+const normalizeModelToken = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/[\\/]+$/g, '');
+};
+const normalizeModelRef = (value) => {
+  const cleaned = normalizeModelToken(value);
+  const parts = cleaned.split('/');
+  if (parts.length < 2) return cleaned;
+  const providerId = parts.shift();
+  const modelId = normalizeModelToken(parts.join('/'));
+  return providerId && modelId ? providerId + '/' + modelId : '';
+};
+const buildModels = (csv, names = {}) => csv
+  .split(',')
+  .map((item) => normalizeModelToken(item))
+  .filter(Boolean)
+  .map((modelId) => ({
+    id: modelId,
+    name: names[modelId] || modelId,
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 8192
+  }));
+config.auth ??= {};
+config.auth.profiles ??= {};
+config.auth.profiles['gac-claude:default'] = { provider: 'gac-claude', mode: 'api_key' };
+config.auth.profiles['gac-codex:default'] = { provider: 'gac-codex', mode: 'api_key' };
+config.models ??= {};
+config.models.providers ??= {};
+config.models.providers['gac-claude'] = {
+  baseUrl: 'https://gaccode.com/claudecode',
+  apiKey: vars.api_key,
+  api: 'anthropic-messages',
+  models: buildModels(vars.gac_claude_models, {
+    'claude-opus-4-6': 'Claude Opus 4.6',
+    'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+    'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
+  })
+};
+config.models.providers['gac-codex'] = {
+  baseUrl: 'https://gaccode.com/codex/v1',
+  apiKey: vars.api_key,
+  api: 'openai-completions',
+  models: buildModels(vars.gac_codex_models, {
+    'gpt-5.4': 'GPT 5.4'
+  })
+};
+config.agents ??= {};
+config.agents.defaults ??= {};
+const normalizedDefaultsModels = {};
+Object.keys(config.agents.defaults.models || {}).forEach((modelRef) => {
+  const normalizedRef = normalizeModelRef(modelRef);
+  if (normalizedRef) normalizedDefaultsModels[normalizedRef] = {};
+});
+config.agents.defaults.models = normalizedDefaultsModels;
+vars.gac_claude_models.split(',').forEach((modelId) => {
+  const normalizedRef = normalizeModelRef('gac-claude/' + normalizeModelToken(modelId));
+  if (normalizedRef) config.agents.defaults.models[normalizedRef] = {};
+});
+vars.gac_codex_models.split(',').forEach((modelId) => {
+  const normalizedRef = normalizeModelRef('gac-codex/' + normalizeModelToken(modelId));
+  if (normalizedRef) config.agents.defaults.models[normalizedRef] = {};
+});
+if (vars.update_default || !config.agents.defaults.model?.primary) {
+  config.agents.defaults.model = {
+    primary: 'gac-claude/' + vars.gac_claude_primary,
+    fallbacks: [
+      'gac-claude/claude-sonnet-4-6',
+      'gac-claude/claude-haiku-4-5-20251001',
+      'gac-codex/' + vars.gac_codex_primary
+    ]
+  };
+}
+fs.writeFileSync(vars.config_file, JSON.stringify(config, null, 2));
+" 2>/dev/null
+        local node_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $node_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ] && command -v python3 &> /dev/null; then
+        local tmp_vars="/tmp/openclaw_gaccode_install_$$.json"
+        cat > "$tmp_vars" << EOFVARS
+{
+  "config_file": "$config_file",
+  "api_key": "$api_key",
+  "update_default": $update_default,
+  "gac_claude_primary": "$gac_claude_primary",
+  "gac_claude_models": "$gac_claude_models",
+  "gac_codex_primary": "$gac_codex_primary",
+  "gac_codex_models": "$gac_codex_models"
+}
+EOFVARS
+        python3 -c "
+import json
+import os
+with open('$tmp_vars', 'r') as f:
+    vars = json.load(f)
+config = {}
+if os.path.exists(vars['config_file']):
+    try:
+        with open(vars['config_file'], 'r') as f:
+            config = json.load(f)
+    except Exception:
+        config = {}
+def normalize_model_token(value):
+    if not isinstance(value, str):
+        return ''
+    return value.strip().rstrip('/\\\\')
+def normalize_model_ref(value):
+    cleaned = normalize_model_token(value)
+    if '/' not in cleaned:
+        return cleaned
+    provider_id, model_id = cleaned.split('/', 1)
+    provider_id = provider_id.strip()
+    model_id = normalize_model_token(model_id)
+    if not provider_id or not model_id:
+        return ''
+    return f'{provider_id}/{model_id}'
+def build_models(csv, names):
+    models = []
+    for item in csv.split(','):
+        model_id = normalize_model_token(item)
+        if not model_id:
+            continue
+        models.append({
+            'id': model_id,
+            'name': names.get(model_id, model_id),
+            'reasoning': False,
+            'input': ['text'],
+            'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
+            'contextWindow': 200000,
+            'maxTokens': 8192
+        })
+    return models
+config.setdefault('auth', {}).setdefault('profiles', {})['gac-claude:default'] = {
+    'provider': 'gac-claude',
+    'mode': 'api_key'
+}
+config.setdefault('auth', {}).setdefault('profiles', {})['gac-codex:default'] = {
+    'provider': 'gac-codex',
+    'mode': 'api_key'
+}
+providers = config.setdefault('models', {}).setdefault('providers', {})
+providers['gac-claude'] = {
+    'baseUrl': 'https://gaccode.com/claudecode',
+    'apiKey': vars['api_key'],
+    'api': 'anthropic-messages',
+    'models': build_models(vars['gac_claude_models'], {
+        'claude-opus-4-6': 'Claude Opus 4.6',
+        'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+        'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
+    })
+}
+providers['gac-codex'] = {
+    'baseUrl': 'https://gaccode.com/codex/v1',
+    'apiKey': vars['api_key'],
+    'api': 'openai-completions',
+    'models': build_models(vars['gac_codex_models'], {
+        'gpt-5.4': 'GPT 5.4'
+    })
+}
+defaults = config.setdefault('agents', {}).setdefault('defaults', {})
+normalized_defaults_models = {}
+for model_ref in defaults.get('models', {}).keys():
+    normalized_ref = normalize_model_ref(model_ref)
+    if normalized_ref:
+        normalized_defaults_models[normalized_ref] = {}
+defaults['models'] = normalized_defaults_models
+for model_id in vars['gac_claude_models'].split(','):
+    normalized_ref = normalize_model_ref(f'gac-claude/{normalize_model_token(model_id)}')
+    if normalized_ref:
+        defaults['models'][normalized_ref] = {}
+for model_id in vars['gac_codex_models'].split(','):
+    normalized_ref = normalize_model_ref(f'gac-codex/{normalize_model_token(model_id)}')
+    if normalized_ref:
+        defaults['models'][normalized_ref] = {}
+if vars.get('update_default') or not defaults.get('model', {}).get('primary'):
+    defaults['model'] = {
+        'primary': f'gac-claude/{vars[\"gac_claude_primary\"]}',
+        'fallbacks': [
+            'gac-claude/claude-sonnet-4-6',
+            'gac-claude/claude-haiku-4-5-20251001',
+            f'gac-codex/{vars[\"gac_codex_primary\"]}'
+        ]
+    }
+with open(vars['config_file'], 'w') as f:
+    json.dump(config, f, indent=2)
+" 2>/dev/null
+        local py_exit=$?
+        rm -f "$tmp_vars" 2>/dev/null
+        if [ $py_exit -eq 0 ]; then
+            config_success=true
+        fi
+    fi
+
+    if [ "$config_success" = false ]; then
+        log_error "GACCode Provider 写入失败（需要 node 或 python3）"
+        return 1
+    fi
+
+    return 0
+}
+
 configure_openclaw_model() {
     log_step "配置 OpenClaw AI 模型..."
     
@@ -1920,6 +2257,11 @@ configure_openclaw_model() {
     local codex_key=""
     local codex_model=""
     local codex_models=""
+    local gac_key=""
+    local gac_claude_model=""
+    local gac_claude_models=""
+    local gac_codex_model=""
+    local gac_codex_models=""
     if [ -f "$env_file" ]; then
         claude_key=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_API_KEY")
         claude_model=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_MODEL")
@@ -1927,9 +2269,20 @@ configure_openclaw_model() {
         codex_key=$(get_env_file_value "$env_file" "TUZI_CODEX_API_KEY")
         codex_model=$(get_env_file_value "$env_file" "TUZI_CODEX_MODEL")
         codex_models=$(get_env_file_value "$env_file" "TUZI_CODEX_MODELS")
+        gac_key=$(get_env_file_value "$env_file" "GACCODE_API_KEY")
+        gac_claude_model=$(get_env_file_value "$env_file" "GAC_CLAUDE_MODEL")
+        gac_claude_models=$(get_env_file_value "$env_file" "GAC_CLAUDE_MODELS")
+        gac_codex_model=$(get_env_file_value "$env_file" "GAC_CODEX_MODEL")
+        gac_codex_models=$(get_env_file_value "$env_file" "GAC_CODEX_MODELS")
     fi
 
-    if [ "$TUZI_GROUP" = "codex" ]; then
+    if [ "$TUZI_GROUP" = "gaccode" ]; then
+        gac_key="$AI_KEY"
+        gac_claude_model=$(get_gac_claude_primary_model)
+        gac_claude_models=$(get_gac_claude_models_csv)
+        gac_codex_model=$(get_gac_codex_primary_model)
+        gac_codex_models=$(get_gac_codex_models_csv)
+    elif [ "$TUZI_GROUP" = "codex" ]; then
         codex_key="$AI_KEY"
         codex_model="$AI_MODEL"
         codex_models="$AI_MODELS"
@@ -1973,6 +2326,21 @@ configure_openclaw_model() {
     if [ -n "$codex_models" ]; then
         append_env_kv "$env_file" "TUZI_CODEX_MODELS" "$codex_models"
     fi
+    if [ -n "$gac_key" ]; then
+        append_env_kv "$env_file" "GACCODE_API_KEY" "$gac_key"
+    fi
+    if [ -n "$gac_claude_model" ]; then
+        append_env_kv "$env_file" "GAC_CLAUDE_MODEL" "$gac_claude_model"
+    fi
+    if [ -n "$gac_claude_models" ]; then
+        append_env_kv "$env_file" "GAC_CLAUDE_MODELS" "$gac_claude_models"
+    fi
+    if [ -n "$gac_codex_model" ]; then
+        append_env_kv "$env_file" "GAC_CODEX_MODEL" "$gac_codex_model"
+    fi
+    if [ -n "$gac_codex_models" ]; then
+        append_env_kv "$env_file" "GAC_CODEX_MODELS" "$gac_codex_models"
+    fi
     
     chmod 600 "$env_file"
     log_info "环境变量配置已保存到: $env_file"
@@ -1982,6 +2350,9 @@ configure_openclaw_model() {
     if check_command openclaw && [ "$should_update_default" = "true" ]; then
         source "$env_file"
         local openclaw_model="$provider_id/$AI_MODEL"
+        if [ "$TUZI_GROUP" = "gaccode" ]; then
+            openclaw_model="gac-claude/$(get_gac_claude_primary_model)"
+        fi
         local set_result
         set_result=$(openclaw models set "$openclaw_model" 2>&1) || true
         local set_exit=$?
@@ -2344,12 +2715,20 @@ run_onboard_wizard() {
                 local google_api_key
 
                 tuzi_group=$(get_current_tuzi_group "$HOME/.openclaw/openclaw.json")
+                TUZI_GROUP="$tuzi_group"
                 if [ "$tuzi_group" = "codex" ]; then
                     tuzi_api_key=$(get_env_file_value "$env_file" "TUZI_CODEX_API_KEY")
                     tuzi_base_url="https://api.tu-zi.com/v1"
                 elif [ "$tuzi_group" = "claude-code" ]; then
                     tuzi_api_key=$(get_env_file_value "$env_file" "TUZI_CLAUDE_CODE_API_KEY")
                     tuzi_base_url="https://api.tu-zi.com"
+                elif [ "$tuzi_group" = "gaccode" ]; then
+                    tuzi_api_key=$(get_env_file_value "$env_file" "GACCODE_API_KEY")
+                    if [[ "$(get_openclaw_primary_model_file "$HOME/.openclaw/openclaw.json")" == gac-codex/* ]]; then
+                        tuzi_base_url="https://gaccode.com/codex/v1"
+                    else
+                        tuzi_base_url="https://gaccode.com/claudecode"
+                    fi
                 fi
                 anthropic_api_key=$(get_env_file_value "$env_file" "ANTHROPIC_API_KEY")
                 anthropic_base_url=$(get_env_file_value "$env_file" "ANTHROPIC_BASE_URL")
@@ -2430,10 +2809,12 @@ setup_ai_provider() {
     echo ""
     echo "  1) 🟣 Claude-Code"
     echo "  2) 🟢 Codex"
+    echo "  3) 🟠 GACCode"
     echo ""
-    read_valid_number_choice "${YELLOW}请选择 Tuzi 分组 [1-2] (默认: 1): ${NC}" 1 2 1 group_choice
+    read_valid_number_choice "${YELLOW}请选择 Tuzi 分组 [1-3] (默认: 1): ${NC}" 1 3 1 group_choice
     case "$group_choice" in
         2) TUZI_GROUP="codex" ;;
+        3) TUZI_GROUP="gaccode" ;;
         *) TUZI_GROUP="claude-code" ;;
     esac
 
@@ -2441,8 +2822,15 @@ setup_ai_provider() {
     echo -e "${GRAY}获取 API Key 教程: https://www.bilibili.com/video/BV1k4PqzPEKz/?vd_source=1bbfadebd95fffa76963a8b99d5d96b9${NC}"
     read_secret_value "${YELLOW}输入 API Key: ${NC}" AI_KEY
     echo ""
-    choose_tuzi_models "$TUZI_GROUP" "$AI_KEY" AI_MODELS
-    AI_MODEL="${AI_MODELS%%,*}"
+    if [ "$TUZI_GROUP" = "gaccode" ]; then
+        AI_MODEL=$(get_gac_claude_primary_model)
+        AI_MODELS=$(get_gac_claude_models_csv)
+        echo -e "${GRAY}GAC Claude 固定模型: $AI_MODELS${NC}"
+        echo -e "${GRAY}GAC Codex 固定模型: $(get_gac_codex_models_csv)${NC}"
+    else
+        choose_tuzi_models "$TUZI_GROUP" "$AI_KEY" AI_MODELS
+        AI_MODEL="${AI_MODELS%%,*}"
+    fi
 
     AI_PROVIDER="tuzi"
     BASE_URL=""
@@ -2452,8 +2840,14 @@ setup_ai_provider() {
     log_info "AI Provider 配置完成"
     echo -e "  提供商: ${WHITE}Tuzi API${NC}"
     echo -e "  Provider: ${WHITE}$TUZI_GROUP${NC}"
-    echo -e "  默认模型: ${WHITE}$AI_MODEL${NC}"
-    echo -e "  已选模型: ${WHITE}$AI_MODELS${NC}"
+    if [ "$TUZI_GROUP" = "gaccode" ]; then
+        echo -e "  默认模型: ${WHITE}gac-claude/$AI_MODEL${NC}"
+        echo -e "  GAC Claude 模型: ${WHITE}$AI_MODELS${NC}"
+        echo -e "  GAC Codex 模型: ${WHITE}$(get_gac_codex_models_csv)${NC}"
+    else
+        echo -e "  默认模型: ${WHITE}$AI_MODEL${NC}"
+        echo -e "  已选模型: ${WHITE}$AI_MODELS${NC}"
+    fi
 }
 
 # ================================ API 连接测试 ================================
